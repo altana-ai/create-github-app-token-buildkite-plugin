@@ -1,0 +1,44 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "--- :github: GitHub App Token Cleanup"
+
+output_variable="${BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE:-GITHUB_TOKEN}"
+
+# Function to revoke token
+revoke_token() {
+  local token="$1"
+  local api_url="$2"
+
+  echo "🔐 Revoking GitHub App token..."
+
+  # Make DELETE request to revoke the token
+  local response
+  response=$(curl -s -w "%{http_code}" -X DELETE \
+    -H "Authorization: token $token" \
+    -H "Accept: application/vnd.github.v3+json" \
+    "${api_url}/installation/token" 2>/dev/null || echo "000")
+
+  local http_code="${response: -3}"
+
+  if [[ "$http_code" == "204" ]]; then
+    echo "✅ Token revoked successfully"
+  else
+    echo "⚠️ Warning: Token revocation failed (HTTP $http_code). Token may still be active."
+  fi
+}
+
+# Check if we have token info for revocation (set by pre-command in same shell session)
+if [[ -n "${GITHUB_APP_TOKEN_FOR_REVOCATION:-}" ]]; then
+  revoke_token "$GITHUB_APP_TOKEN_FOR_REVOCATION" "${GITHUB_API_URL_FOR_REVOCATION:-https://api.github.com}"
+  # Clear the token from memory
+  unset GITHUB_APP_TOKEN_FOR_REVOCATION GITHUB_API_URL_FOR_REVOCATION
+else
+  echo "ℹ️ Token revocation skipped (skip-token-revoke=true or no token found)"
+fi
+
+# Clean up token from environment
+if [[ -n "${!output_variable:-}" ]]; then
+  echo "🧹 Cleaning up GitHub App token from environment variable $output_variable"
+  unset "$output_variable"
+fi

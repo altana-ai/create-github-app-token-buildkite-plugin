@@ -1,0 +1,89 @@
+name: Create GitHub App Token
+description: Generate GitHub App installation access tokens for use in Buildkite pipelines
+author: https://github.com/jasonwbarnett
+requirements:
+  - openssl
+  - curl
+  - buildkite-agent
+  - jq
+configuration:
+  properties:
+    app-id:
+      type: string
+      description: GitHub App ID
+    private-key:
+      type: string
+      description: GitHub App private key (PEM format)
+    owner:
+      type: string
+      description: Repository owner (defaults to current repository owner)
+    repositories:
+      type: string
+      description: Comma or newline-separated list of repositories
+    skip-token-revoke:
+      type: string
+      description: Skip token revocation (defaults to false)
+      default: "false"
+    github-api-url:
+      type: string
+      description: GitHub REST API URL (defaults to https://api.github.com)
+      default: "https://api.github.com"
+    output-variable:
+      type: string
+      description: Environment variable name to store the token (Buildkite-specific)
+      default: GITHUB_TOKEN
+    permission-actions:
+      type: string
+      description: Actions permission level (read, write)
+    permission-administration:
+      type: string
+      description: Administration permission level (read, write)
+    permission-checks:
+      type: string
+      description: Checks permission level (read, write)
+    permission-codespaces:
+      type: string
+      description: Codespaces permission level (read, write)
+    permission-contents:
+      type: string
+      description: Contents permission level (read, write)
+    permission-deployments:
+      type: string
+      description: Deployments permission level (read, write)
+    permission-environments:
+      type: string
+      description: Environments permission level (read, write)
+    permission-issues:
+      type: string
+      description: Issues permission level (read, write)
+    permission-metadata:
+      type: string
+      description: Metadata permission level (read, write)
+    permission-packages:
+      type: string
+      description: Packages permission level (read, write)
+    permission-pages:
+      type: string
+      description: Pages permission level (read, write)
+    permission-pull-requests:
+      type: string
+      description: Pull requests permission level (read, write)
+    permission-repository-hooks:
+      type: string
+      description: Repository hooks permission level (read, write)
+    permission-repository-projects:
+      type: string
+      description: Repository projects permission level (read, write)
+    permission-security-events:
+      type: string
+      description: Security events permission level (read, write)
+    permission-statuses:
+      type: string
+      description: Statuses permission level (read, write)
+    permission-vulnerability-alerts:
+      type: string
+      description: Vulnerability alerts permission level (read, write)
+  required:
+    - app-id
+    - private-key
+  additionalProperties: false

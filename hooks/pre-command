@@ -1,0 +1,355 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "--- :github: Creating GitHub App Token"
+
+PLUGIN_PREFIX="CREATE_GITHUB_APP_TOKEN"
+
+# Plugin configuration reader function
+function plugin_read_config() {
+  local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
+  local default="${2:-}"
+  local value="${!var:-$default}"
+
+  # Handle environment variable expansion for values starting with $
+  if [[ "$value" =~ ^\$([A-Za-z_][A-Za-z0-9_]*) ]]; then
+    local env_var="${BASH_REMATCH[1]}"
+    echo "${!env_var}"
+  else
+    echo "$value"
+  fi
+}
+
+# Get plugin configuration
+app_id=$(plugin_read_config "APP_ID")
+private_key=$(plugin_read_config "PRIVATE_KEY")
+owner=$(plugin_read_config "OWNER")
+repositories=$(plugin_read_config "REPOSITORIES")
+skip_token_revoke=$(plugin_read_config "SKIP_TOKEN_REVOKE" "false")
+github_api_url=$(plugin_read_config "GITHUB_API_URL" "https://api.github.com")
+output_variable=$(plugin_read_config "OUTPUT_VARIABLE" "GITHUB_TOKEN")
+
+# Clean null bytes and other problematic characters from private key
+private_key=$(echo "$private_key" | tr -d '\0' | tr -d '\r')
+
+# Get permission configurations
+permission_actions=$(plugin_read_config "PERMISSION_ACTIONS")
+permission_administration=$(plugin_read_config "PERMISSION_ADMINISTRATION")
+permission_checks=$(plugin_read_config "PERMISSION_CHECKS")
+permission_codespaces=$(plugin_read_config "PERMISSION_CODESPACES")
+permission_contents=$(plugin_read_config "PERMISSION_CONTENTS")
+permission_deployments=$(plugin_read_config "PERMISSION_DEPLOYMENTS")
+permission_environments=$(plugin_read_config "PERMISSION_ENVIRONMENTS")
+permission_issues=$(plugin_read_config "PERMISSION_ISSUES")
+permission_metadata=$(plugin_read_config "PERMISSION_METADATA")
+permission_packages=$(plugin_read_config "PERMISSION_PACKAGES")
+permission_pages=$(plugin_read_config "PERMISSION_PAGES")
+permission_pull_requests=$(plugin_read_config "PERMISSION_PULL_REQUESTS")
+permission_repository_hooks=$(plugin_read_config "PERMISSION_REPOSITORY_HOOKS")
+permission_repository_projects=$(plugin_read_config "PERMISSION_REPOSITORY_PROJECTS")
+permission_security_events=$(plugin_read_config "PERMISSION_SECURITY_EVENTS")
+permission_statuses=$(plugin_read_config "PERMISSION_STATUSES")
+permission_vulnerability_alerts=$(plugin_read_config "PERMISSION_VULNERABILITY_ALERTS")
+
+# Validate required inputs
+if [[ -z "$app_id" ]]; then
+  echo "❌ Error: app-id is required" >&2
+  exit 1
+fi
+
+if [[ -z "$private_key" ]]; then
+  echo "❌ Error: private-key is required" >&2
+  exit 1
+fi
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+  echo "❌ Error: jq is required but not installed" >&2
+  echo "Please install jq to use this plugin" >&2
+  exit 1
+fi
+
+# Function to generate JWT token
+generate_jwt() {
+  local app_id="$1"
+  local private_key="$2"
+
+  # Validate private key format
+  if [[ -z "$private_key" ]]; then
+    echo "❌ Error: Private key is empty" >&2
+    exit 1
+  fi
+
+  if [[ ! "$private_key" =~ -----BEGIN ]]; then
+    echo "❌ Error: Private key does not appear to be in PEM format (missing -----BEGIN)" >&2
+    exit 1
+  fi
+
+  # Create temporary file for private key
+  local temp_key_file
+  temp_key_file=$(mktemp)
+
+  # Write private key to temp file and clean null bytes
+  echo "$private_key" | tr -d '\0' | tr -d '\r' > "$temp_key_file"
+
+  # Test if OpenSSL can read the private key
+  if ! openssl rsa -in "$temp_key_file" -check -noout >/dev/null 2>&1; then
+    echo "❌ Error: Invalid private key format or content" >&2
+    rm "$temp_key_file"
+    exit 1
+  fi
+
+  # Generate JWT payload
+  local now
+  now=$(date +%s)
+  local exp=$((now + 600))  # 10 minutes expiration
+
+  # Create header and payload
+  local header='{"alg":"RS256","typ":"JWT"}'
+  local payload="{\"iat\":$now,\"exp\":$exp,\"iss\":\"$app_id\"}"
+
+  # Base64 encode header and payload
+  local encoded_header
+  encoded_header=$(echo -n "$header" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+  local encoded_payload
+  encoded_payload=$(echo -n "$payload" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+
+  # Create signature
+  local signature_input="${encoded_header}.${encoded_payload}"
+  local signature temp_sign_output_file
+
+  # Use temporary file for OpenSSL output to avoid null byte issues
+  temp_sign_output_file=$(mktemp)
+  echo -n "$signature_input" | openssl dgst -sha256 -sign "$temp_key_file" > "$temp_sign_output_file" 2>/dev/null
+  local sign_exit_code=$?
+
+  if [[ $sign_exit_code -ne 0 ]]; then
+    echo "❌ Error: Failed to sign JWT token" >&2
+    rm "$temp_key_file" "$temp_sign_output_file"
+    exit 1
+  fi
+
+  # Base64 encode directly from file to avoid null bytes in variables
+  signature=$(base64 < "$temp_sign_output_file" | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+
+  # Clean up temporary files
+  rm "$temp_key_file" "$temp_sign_output_file"
+
+  # Return JWT
+  echo "${encoded_header}.${encoded_payload}.${signature}"
+}
+
+# Function to get repository owner and name
+get_repo_info() {
+  local repo_owner repo_name
+
+  # Use provided owner or extract from BUILDKITE_REPO
+  if [[ -n "$owner" ]]; then
+    repo_owner="$owner"
+    # When owner is specified, we need to determine repo name
+    if [[ -n "${BUILDKITE_REPO:-}" ]]; then
+      if [[ "$BUILDKITE_REPO" =~ git@github\.com:(.+)/(.+)\.git ]]; then
+        repo_name="${BASH_REMATCH[2]}"
+      elif [[ "$BUILDKITE_REPO" =~ https://github\.com/(.+)/(.+)\.git ]]; then
+        repo_name="${BASH_REMATCH[2]}"
+      else
+        echo "❌ Error: Unable to parse repository name from BUILDKITE_REPO: $BUILDKITE_REPO" >&2
+        exit 1
+      fi
+    else
+      echo "❌ Error: BUILDKITE_REPO environment variable not set" >&2
+      exit 1
+    fi
+  else
+    # Auto-detect owner and repo from BUILDKITE_REPO
+    if [[ -n "${BUILDKITE_REPO:-}" ]]; then
+      if [[ "$BUILDKITE_REPO" =~ git@github\.com:(.+)/(.+)\.git ]]; then
+        repo_owner="${BASH_REMATCH[1]}"
+        repo_name="${BASH_REMATCH[2]}"
+      elif [[ "$BUILDKITE_REPO" =~ https://github\.com/(.+)/(.+)\.git ]]; then
+        repo_owner="${BASH_REMATCH[1]}"
+        repo_name="${BASH_REMATCH[2]}"
+      else
+        echo "❌ Error: Unable to parse repository from BUILDKITE_REPO: $BUILDKITE_REPO" >&2
+        exit 1
+      fi
+    else
+      echo "❌ Error: BUILDKITE_REPO environment variable not set" >&2
+      exit 1
+    fi
+  fi
+
+  echo "$repo_owner $repo_name"
+}
+
+# Function to get installation ID
+get_installation_id() {
+  local jwt_token="$1"
+  local repo_owner="$2"
+  local repo_name="$3"
+
+  # Get installation ID for the repository
+  local response http_code
+  response=$(curl -s -w "%{http_code}" -H "Authorization: Bearer $jwt_token" \
+    -H "Accept: application/vnd.github.v3+json" \
+    "${github_api_url}/repos/${repo_owner}/${repo_name}/installation")
+
+  # Extract HTTP status code and response body
+  http_code="${response: -3}"
+  response="${response%???}"
+
+  # Check for 404 - App not installed
+  if [[ "$http_code" == "404" ]]; then
+    echo "❌ Error: GitHub App is not installed on ${repo_owner}/${repo_name}" >&2
+    echo "Please install the GitHub App on this repository or organization:" >&2
+    echo "1. Go to your GitHub App settings" >&2
+    echo "2. Click 'Install App' in the left sidebar" >&2
+    echo "3. Select the organization/account: ${repo_owner}" >&2
+    echo "4. Choose to install on selected repositories or all repositories" >&2
+    exit 1
+  fi
+
+  # Check for other HTTP errors
+  if [[ "$http_code" != "200" ]]; then
+    echo "❌ Error: Failed to get installation information (HTTP $http_code)" >&2
+    echo "Response: $response" >&2
+    exit 1
+  fi
+
+  # Extract installation ID from response using jq
+  local installation_id
+  installation_id=$(echo "$response" | jq -r '.id')
+
+  if [[ -z "$installation_id" || "$installation_id" == "null" ]]; then
+    echo "❌ Error: Failed to extract installation ID from response" >&2
+    echo "Response: $response" >&2
+    exit 1
+  fi
+
+  echo "$installation_id"
+}
+
+# Function to build permissions JSON
+build_permissions_json() {
+  local permissions=()
+
+  [[ -n "$permission_actions" ]] && permissions+=("\"actions\": \"$permission_actions\"")
+  [[ -n "$permission_administration" ]] && permissions+=("\"administration\": \"$permission_administration\"")
+  [[ -n "$permission_checks" ]] && permissions+=("\"checks\": \"$permission_checks\"")
+  [[ -n "$permission_codespaces" ]] && permissions+=("\"codespaces\": \"$permission_codespaces\"")
+  [[ -n "$permission_contents" ]] && permissions+=("\"contents\": \"$permission_contents\"")
+  [[ -n "$permission_deployments" ]] && permissions+=("\"deployments\": \"$permission_deployments\"")
+  [[ -n "$permission_environments" ]] && permissions+=("\"environments\": \"$permission_environments\"")
+  [[ -n "$permission_issues" ]] && permissions+=("\"issues\": \"$permission_issues\"")
+  [[ -n "$permission_metadata" ]] && permissions+=("\"metadata\": \"$permission_metadata\"")
+  [[ -n "$permission_packages" ]] && permissions+=("\"packages\": \"$permission_packages\"")
+  [[ -n "$permission_pages" ]] && permissions+=("\"pages\": \"$permission_pages\"")
+  [[ -n "$permission_pull_requests" ]] && permissions+=("\"pull_requests\": \"$permission_pull_requests\"")
+  [[ -n "$permission_repository_hooks" ]] && permissions+=("\"repository_hooks\": \"$permission_repository_hooks\"")
+  [[ -n "$permission_repository_projects" ]] && permissions+=("\"repository_projects\": \"$permission_repository_projects\"")
+  [[ -n "$permission_security_events" ]] && permissions+=("\"security_events\": \"$permission_security_events\"")
+  [[ -n "$permission_statuses" ]] && permissions+=("\"statuses\": \"$permission_statuses\"")
+  [[ -n "$permission_vulnerability_alerts" ]] && permissions+=("\"vulnerability_alerts\": \"$permission_vulnerability_alerts\"")
+
+  if [[ ${#permissions[@]} -gt 0 ]]; then
+    local IFS=','
+    echo "{\"permissions\": {${permissions[*]}}}"
+  else
+    echo "{}"
+  fi
+}
+
+# Function to build repositories array
+build_repositories_json() {
+  if [[ -n "$repositories" ]]; then
+    # Convert comma or newline-separated list to JSON array
+    local repo_array=()
+    IFS=$'\n,' read -ra REPO_LIST <<< "$repositories"
+    for repo in "${REPO_LIST[@]}"; do
+      repo=$(echo "$repo" | xargs)  # Trim whitespace
+      [[ -n "$repo" ]] && repo_array+=("\"$repo\"")
+    done
+
+    if [[ ${#repo_array[@]} -gt 0 ]]; then
+      local IFS=','
+      echo "[${repo_array[*]}]"
+    else
+      echo "null"
+    fi
+  else
+    echo "null"
+  fi
+}
+
+# Function to generate installation access token
+generate_installation_token() {
+  local jwt_token="$1"
+  local installation_id="$2"
+
+  # Build request body
+  local permissions_json repositories_json request_body
+  permissions_json=$(build_permissions_json)
+  repositories_json=$(build_repositories_json)
+
+  # Combine permissions and repositories into request body
+  if [[ "$permissions_json" == "{}" && "$repositories_json" == "null" ]]; then
+    request_body="{}"
+  elif [[ "$permissions_json" == "{}" ]]; then
+    request_body="{\"repositories\": $repositories_json}"
+  elif [[ "$repositories_json" == "null" ]]; then
+    request_body="$permissions_json"
+  else
+    # Merge permissions and repositories JSON
+    request_body=$(echo "$permissions_json" | sed 's/}$//')
+    request_body="${request_body}, \"repositories\": ${repositories_json}}"
+  fi
+
+  # Generate installation access token
+  local response
+  response=$(curl -s -X POST \
+    -H "Authorization: Bearer $jwt_token" \
+    -H "Accept: application/vnd.github.v3+json" \
+    -H "Content-Type: application/json" \
+    -d "$request_body" \
+    "${github_api_url}/app/installations/${installation_id}/access_tokens")
+
+  # Extract token from response using jq
+  local token
+  token=$(echo "$response" | jq -r '.token')
+
+  if [[ -z "$token" || "$token" == "null" ]]; then
+    echo "❌ Error: Failed to generate installation token. Response: $response" >&2
+    exit 1
+  fi
+
+  echo "$token"
+}
+
+# Main execution
+echo "🔑 Generating JWT token..."
+jwt_token=$(generate_jwt "$app_id" "$private_key")
+
+echo "🔍 Getting repository information..."
+repo_info=$(get_repo_info)
+read -r repo_owner repo_name <<< "$repo_info"
+echo "Repository: $repo_owner/$repo_name"
+
+echo "🔍 Getting installation ID..."
+installation_id=$(get_installation_id "$jwt_token" "$repo_owner" "$repo_name")
+
+echo "🎫 Generating installation access token..."
+access_token=$(generate_installation_token "$jwt_token" "$installation_id")
+
+# Add token to CLI redactor to prevent logging
+echo "$access_token" | buildkite-agent redactor add
+
+# Export token as environment variable
+export "$output_variable"="$access_token"
+echo "✅ GitHub App token generated and exported as $output_variable"
+
+# Store token information for post-command cleanup if revocation is enabled
+if [[ "$skip_token_revoke" == "false" ]]; then
+  # Set variables for post-command to access in the same shell session
+  GITHUB_APP_TOKEN_FOR_REVOCATION="$access_token"
+  GITHUB_API_URL_FOR_REVOCATION="$github_api_url"
+fi
