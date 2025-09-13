@@ -12,7 +12,7 @@ Generate a GitHub App token and use it to authenticate with GitHub:
 steps:
   - label: "Generate GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -55,6 +55,7 @@ Example: `"octocat"`
 Comma or newline-separated list of repository names to scope the token access. If not specified, the token will have access to all repositories the GitHub App is installed on.
 
 Example: `"repo1,repo2"` or:
+
 ```yaml
 repositories: |
   repo1
@@ -88,54 +89,71 @@ Example: `"CUSTOM_TOKEN_VAR"`
 You can specify granular permissions for the generated token. Each permission can be set to `"read"` or `"write"`.
 
 #### `permission-actions` (string)
+
 Actions workflows permission level.
 
 #### `permission-administration` (string)
+
 Repository administration permission level.
 
 #### `permission-checks` (string)
+
 Code checks permission level.
 
 #### `permission-codespaces` (string)
+
 Codespaces management permission level.
 
 #### `permission-contents` (string)
+
 Repository contents permission level.
 
 #### `permission-deployments` (string)
+
 Deployments permission level.
 
 #### `permission-environments` (string)
+
 Environments permission level.
 
 #### `permission-issues` (string)
+
 Issues permission level.
 
 #### `permission-metadata` (string)
+
 Repository metadata permission level.
 
 #### `permission-packages` (string)
+
 Packages permission level.
 
 #### `permission-pages` (string)
+
 GitHub Pages permission level.
 
 #### `permission-pull-requests` (string)
+
 Pull requests permission level.
 
 #### `permission-repository-hooks` (string)
+
 Repository webhooks permission level.
 
 #### `permission-repository-projects` (string)
+
 Repository projects permission level.
 
 #### `permission-security-events` (string)
+
 Security events permission level.
 
 #### `permission-statuses` (string)
+
 Commit statuses permission level.
 
 #### `permission-vulnerability-alerts` (string)
+
 Vulnerability alerts permission level.
 
 ## Usage Examples
@@ -146,7 +164,7 @@ Vulnerability alerts permission level.
 steps:
   - label: "Use GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -160,7 +178,7 @@ steps:
 steps:
   - label: "Scoped GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           repositories: "repo1,repo2"
@@ -178,7 +196,7 @@ steps:
 steps:
   - label: "Enterprise GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           github-api-url: "https://github.company.com/api/v3"
@@ -193,7 +211,7 @@ steps:
 steps:
   - label: "Long-lived Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           skip-token-revoke: "true"
@@ -208,7 +226,7 @@ steps:
 steps:
   - label: "Custom Token Variable"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           output-variable: "MY_GITHUB_TOKEN"
@@ -233,7 +251,7 @@ Then reference them in your pipeline:
 steps:
   - label: "Generate Token with Secrets"
     plugins:
-      - jasonwbarnett/create-github-app-token#main:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -283,6 +301,7 @@ The plugin will automatically expand `$GITHUB_APP_ID` to the value of the `GITHU
 ### Error: Unable to parse repository from BUILDKITE_REPO
 
 This error occurs when the plugin cannot determine the GitHub repository from the `BUILDKITE_REPO` environment variable. Ensure your repository URL is in one of these formats:
+
 - `git@github.com:owner/repo.git`
 - `https://github.com/owner/repo.git`
 
@@ -300,6 +319,7 @@ This error replaces the generic "Failed to get installation ID" message and prov
 ### Error: Failed to generate installation token
 
 This typically indicates:
+
 1. Invalid private key format
 2. Clock skew (JWT timestamps are invalid)
 3. Insufficient GitHub App permissions
