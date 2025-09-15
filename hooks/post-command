@@ -3,7 +3,25 @@ set -euo pipefail
 
 echo "--- :github: GitHub App Token Cleanup"
 
-output_variable="${BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE:-GITHUB_TOKEN}"
+PLUGIN_PREFIX="CREATE_GITHUB_APP_TOKEN"
+
+# Plugin configuration reader function
+function plugin_read_config() {
+  local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
+  local default="${2:-}"
+  local value="${!var:-$default}"
+
+  # Handle environment variable expansion for values starting with $
+  if [[ "$value" =~ ^\$([A-Za-z_][A-Za-z0-9_]*) ]]; then
+    local env_var="${BASH_REMATCH[1]}"
+    echo "${!env_var}"
+  else
+    echo "$value"
+  fi
+}
+
+output_variable=$(plugin_read_config "OUTPUT_VARIABLE" "GITHUB_TOKEN")
+skip_token_revoke=$(plugin_read_config "SKIP_TOKEN_REVOKE" "false")
 
 # Function to revoke token
 revoke_token() {
@@ -28,17 +46,27 @@ revoke_token() {
   fi
 }
 
-# Check if we have token info for revocation (set by pre-command in same shell session)
-if [[ -n "${GITHUB_APP_TOKEN_FOR_REVOCATION:-}" ]]; then
+# Handle token revocation
+if [[ "$skip_token_revoke" == "true" ]]; then
+  echo "ℹ️ Token revocation disabled (skip-token-revoke=true)"
+elif [[ -n "${GITHUB_APP_TOKEN_FOR_REVOCATION:-}" ]]; then
   revoke_token "$GITHUB_APP_TOKEN_FOR_REVOCATION" "${GITHUB_API_URL_FOR_REVOCATION:-https://api.github.com}"
   # Clear the token from memory
   unset GITHUB_APP_TOKEN_FOR_REVOCATION GITHUB_API_URL_FOR_REVOCATION
 else
-  echo "ℹ️ Token revocation skipped (skip-token-revoke=true or no token found)"
+  echo "ℹ️ No token available for revocation (token may have been created with skip-token-revoke=true)"
 fi
 
 # Clean up token from environment
 if [[ -n "${!output_variable:-}" ]]; then
   echo "🧹 Cleaning up GitHub App token from environment variable $output_variable"
   unset "$output_variable"
+  # Verify cleanup was successful
+  if [[ -z "${!output_variable:-}" ]]; then
+    echo "✅ Environment variable $output_variable successfully cleared"
+  else
+    echo "⚠️ Warning: Failed to clear environment variable $output_variable"
+  fi
+else
+  echo "ℹ️ Environment variable $output_variable is not set (nothing to clean up)"
 fi
