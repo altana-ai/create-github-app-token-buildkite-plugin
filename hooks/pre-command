@@ -359,6 +359,10 @@ echo "Repository: $repo_owner/$repo_name"
 echo "🔍 Getting installation ID..."
 installation_id=$(get_installation_id "$jwt_token" "$repo_owner" "$repo_name")
 
+# Export installation ID as environment variable
+export GITHUB_APP_INSTALLATION_ID="$installation_id"
+echo "✅ GitHub App installation ID exported as GITHUB_APP_INSTALLATION_ID: $installation_id"
+
 echo "🎫 Generating installation access token..."
 access_token=$(generate_installation_token "$jwt_token" "$installation_id")
 
