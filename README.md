@@ -156,6 +156,14 @@ Commit statuses permission level.
 
 Vulnerability alerts permission level.
 
+### Organization Permission Parameters
+
+You can specify granular organization-level permissions for the generated token. Each permission can be set to `"read"` or `"write"`.
+
+#### `permission-organization-members` (string)
+
+Organization members permission level. Allows access to organization member information.
+
 ## Usage Examples
 
 ### Basic Usage
@@ -188,6 +196,21 @@ steps:
     command: |
       # Token has limited scope and permissions
       gh api repos/owner/repo1/contents/README.md
+```
+
+### With Organization Members Permission
+
+```yaml
+steps:
+  - label: "Organization Members Access"
+    plugins:
+      - jasonwbarnett/create-github-app-token#v0.1.0:
+          app-id: "$$GITHUB_APP_ID"
+          private-key: "$$GITHUB_APP_PRIVATE_KEY"
+          permission-organization-members: "read"
+    command: |
+      # Token can access organization member information
+      gh api orgs/myorg/members
 ```
 
 ### GitHub Enterprise Server

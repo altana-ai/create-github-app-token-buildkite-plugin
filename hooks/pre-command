@@ -51,6 +51,9 @@ permission_security_events=$(plugin_read_config "PERMISSION_SECURITY_EVENTS")
 permission_statuses=$(plugin_read_config "PERMISSION_STATUSES")
 permission_vulnerability_alerts=$(plugin_read_config "PERMISSION_VULNERABILITY_ALERTS")
 
+# Get organization permission configurations
+permission_organization_members=$(plugin_read_config "PERMISSION_ORGANIZATION_MEMBERS")
+
 # Validate required inputs
 if [[ -z "$app_id" ]]; then
   echo "❌ Error: app-id is required" >&2
@@ -233,6 +236,7 @@ get_installation_id() {
 build_permissions_json() {
   local permissions=()
 
+  # Repository permissions
   [[ -n "$permission_actions" ]] && permissions+=("\"actions\": \"$permission_actions\"")
   [[ -n "$permission_administration" ]] && permissions+=("\"administration\": \"$permission_administration\"")
   [[ -n "$permission_checks" ]] && permissions+=("\"checks\": \"$permission_checks\"")
@@ -250,6 +254,9 @@ build_permissions_json() {
   [[ -n "$permission_security_events" ]] && permissions+=("\"security_events\": \"$permission_security_events\"")
   [[ -n "$permission_statuses" ]] && permissions+=("\"statuses\": \"$permission_statuses\"")
   [[ -n "$permission_vulnerability_alerts" ]] && permissions+=("\"vulnerability_alerts\": \"$permission_vulnerability_alerts\"")
+
+  # Organization permissions
+  [[ -n "$permission_organization_members" ]] && permissions+=("\"members\": \"$permission_organization_members\"")
 
   if [[ ${#permissions[@]} -gt 0 ]]; then
     local IFS=','
