@@ -312,19 +312,19 @@ generate_installation_token() {
   fi
 
   # Log the token request payload
-  echo "📋 Token request payload: $request_body"
+  echo "📋 Token request payload: $request_body" >&2
 
   # Extract and log just the permissions for easier reading
   local permissions_summary
   permissions_summary=$(echo "$request_body" | jq -r '.permissions // {} | to_entries | map("\(.key): \(.value)") | join(", ")')
   if [[ -n "$permissions_summary" && "$permissions_summary" != "" ]]; then
-    echo "🔐 Requested permissions: $permissions_summary"
+    echo "🔐 Requested permissions: $permissions_summary" >&2
   fi
 
   # Log repositories if specified
   local repositories_summary
   repositories_summary=$(echo "$request_body" | jq -r '.repositories // null | if . == null then "all accessible" else join(", ") end')
-  echo "📁 Target repositories: $repositories_summary"
+  echo "📁 Target repositories: $repositories_summary" >&2
 
   # Generate installation access token
   local response
