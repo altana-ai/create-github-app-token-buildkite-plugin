@@ -355,7 +355,3 @@ To contribute to this plugin:
 2. Make your changes
 3. Test with a Buildkite pipeline
 4. Submit a pull request
-
-## License
-
-MIT (see [LICENSE](LICENSE))

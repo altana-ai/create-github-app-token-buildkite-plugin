@@ -1,6 +1,6 @@
 name: Create GitHub App Token
 description: Generate GitHub App installation access tokens for use in Buildkite pipelines
-author: https://github.com/jasonwbarnett
+author: https://github.com/altana-ai
 requirements:
   - openssl
   - curl
