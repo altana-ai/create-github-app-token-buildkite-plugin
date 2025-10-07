@@ -12,7 +12,7 @@ Generate a GitHub App token and use it to authenticate with GitHub:
 steps:
   - label: "Generate GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -172,7 +172,7 @@ Organization members permission level. Allows access to organization member info
 steps:
   - label: "Use GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -186,7 +186,7 @@ steps:
 steps:
   - label: "Scoped GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           repositories: "repo1,repo2"
@@ -204,7 +204,7 @@ steps:
 steps:
   - label: "Organization Members Access"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           permission-organization-members: "read"
@@ -219,7 +219,7 @@ steps:
 steps:
   - label: "Enterprise GitHub App Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           github-api-url: "https://github.company.com/api/v3"
@@ -234,7 +234,7 @@ steps:
 steps:
   - label: "Long-lived Token"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           skip-token-revoke: "true"
@@ -249,7 +249,7 @@ steps:
 steps:
   - label: "Custom Token Variable"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           output-variable: "MY_GITHUB_TOKEN"
@@ -274,7 +274,7 @@ Then reference them in your pipeline:
 steps:
   - label: "Generate Token with Secrets"
     plugins:
-      - jasonwbarnett/create-github-app-token#v0.1.0:
+      - altana-ai/create-github-app-token#v0.4.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
