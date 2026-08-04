@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stub for buildkite-agent. Records the subcommand in $REDACTOR_LOG and drains
+# stdin, which `redactor add` reads the secret from.
+set -uo pipefail
+
+printf '%s\n' "$*" >> "$REDACTOR_LOG"
+
+if [[ ! -t 0 ]]; then
+  cat > /dev/null
+fi

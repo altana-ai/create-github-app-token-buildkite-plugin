@@ -307,7 +307,7 @@ generate_installation_token() {
     request_body="$permissions_json"
   else
     # Merge permissions and repositories JSON
-    request_body=$(echo "$permissions_json" | sed 's/}$//')
+    request_body="${permissions_json%\}}"
     request_body="${request_body}, \"repositories\": ${repositories_json}}"
   fi
 
@@ -373,9 +373,10 @@ echo "$access_token" | buildkite-agent redactor add
 export "$output_variable"="$access_token"
 echo "✅ GitHub App token generated and exported as $output_variable"
 
-# Store token information for post-command cleanup if revocation is enabled
+# Store token information for post-command cleanup if revocation is enabled.
+# These must be exported: buildkite-agent propagates only exported variables
+# between hooks, so a plain assignment leaves post-command with nothing to revoke.
 if [[ "$skip_token_revoke" == "false" ]]; then
-  # Set variables for post-command to access in the same shell session
-  GITHUB_APP_TOKEN_FOR_REVOCATION="$access_token"
-  GITHUB_API_URL_FOR_REVOCATION="$github_api_url"
+  export GITHUB_APP_TOKEN_FOR_REVOCATION="$access_token"
+  export GITHUB_API_URL_FOR_REVOCATION="$github_api_url"
 fi

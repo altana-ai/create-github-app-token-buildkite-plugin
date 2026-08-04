@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Stub for curl. Records the invocation in $CURL_LOG and answers the three
+# GitHub API endpoints the hooks call.
+#
+# The hooks pass `-w "%{http_code}"` on the GET and the DELETE, so those
+# responses append the status code to the body the way real curl does. The POST
+# does not, so it returns a bare JSON body.
+set -uo pipefail
+
+printf '%s\n' "$*" >> "$CURL_LOG"
+
+# curl is always invoked with the URL as the final argument.
+url="${!#}"
+
+case "$url" in
+  */installation/token)
+    # DELETE — token revocation. 204 is success; no body.
+    printf '%s' "${STUB_REVOKE_HTTP_CODE:-204}"
+    ;;
+  */installation)
+    # GET — installation lookup for the repository.
+    http_code="${STUB_INSTALLATION_HTTP_CODE:-200}"
+    if [[ "$http_code" == "200" ]]; then
+      printf '{"id":%s}%s' "${STUB_INSTALLATION_ID:-87654321}" "$http_code"
+    else
+      printf '{"message":"stubbed failure"}%s' "$http_code"
+    fi
+    ;;
+  */access_tokens)
+    # POST — mint an installation access token.
+    if [[ "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
+      printf '{"message":"stubbed failure"}'
+    else
+      printf '{"token":"%s","expires_at":"2099-01-01T00:00:00Z"}' "$STUB_ACCESS_TOKEN"
+    fi
+    ;;
+  *)
+    echo "curl stub: unexpected URL: $url" >&2
+    exit 22
+    ;;
+esac

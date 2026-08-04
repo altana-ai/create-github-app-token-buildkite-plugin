@@ -54,7 +54,11 @@ elif [[ -n "${GITHUB_APP_TOKEN_FOR_REVOCATION:-}" ]]; then
   # Clear the token from memory
   unset GITHUB_APP_TOKEN_FOR_REVOCATION GITHUB_API_URL_FOR_REVOCATION
 else
-  echo "ℹ️ No token available for revocation (token may have been created with skip-token-revoke=true)"
+  # Revocation is enabled (skip-token-revoke is not "true") yet pre-command left no
+  # token behind, so nothing can be revoked and the token stays valid until it expires.
+  echo "⚠️ Warning: token revocation is enabled but no token was found to revoke."
+  echo "   Any token minted for this step remains valid until it expires (up to 1 hour)."
+  echo "   This means the pre-command hook did not run, or failed before minting a token."
 fi
 
 # Clean up token from environment
