@@ -12,7 +12,7 @@ Generate a GitHub App token and use it to authenticate with GitHub:
 steps:
   - label: "Generate GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -172,7 +172,7 @@ Organization members permission level. Allows access to organization member info
 steps:
   - label: "Use GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -186,7 +186,7 @@ steps:
 steps:
   - label: "Scoped GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           repositories: "repo1,repo2"
@@ -204,7 +204,7 @@ steps:
 steps:
   - label: "Organization Members Access"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           permission-organization-members: "read"
@@ -219,7 +219,7 @@ steps:
 steps:
   - label: "Enterprise GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           github-api-url: "https://github.company.com/api/v3"
@@ -234,7 +234,7 @@ steps:
 steps:
   - label: "Long-lived Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           skip-token-revoke: "true"
@@ -249,7 +249,7 @@ steps:
 steps:
   - label: "Custom Token Variable"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           output-variable: "MY_GITHUB_TOKEN"
@@ -274,7 +274,7 @@ Then reference them in your pipeline:
 steps:
   - label: "Generate Token with Secrets"
     plugins:
-      - altana-ai/create-github-app-token#v0.4.0:
+      - altana-ai/create-github-app-token#v0.5.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -353,5 +353,22 @@ To contribute to this plugin:
 
 1. Clone the repository
 2. Make your changes
-3. Test with a Buildkite pipeline
+3. Run the tests (below) and, for agent-side behaviour, a Buildkite pipeline
 4. Submit a pull request
+
+### Tests
+
+The hooks are covered by [bats](https://github.com/bats-core/bats-core) tests
+that stub `curl` and `buildkite-agent`, so they never reach the GitHub API:
+
+```bash
+bats tests
+```
+
+`tests/revocation.bats` drives `pre-command` and `post-command` the way
+`buildkite-agent` does — the hook body is sourced, then the next hook runs as a
+child process — because only *exported* variables survive that boundary. Any
+hand-off between the two hooks has to be tested through it to be meaningful.
+
+`shellcheck hooks/* tests/test_helper.bash tests/stubs/*` must also be clean.
+Both run in CI on every pull request.
