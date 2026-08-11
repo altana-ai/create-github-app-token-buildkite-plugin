@@ -32,57 +32,178 @@ configuration:
       type: string
       description: Environment variable name to store the token (Buildkite-specific)
       default: GITHUB_TOKEN
+    # The permission-* properties below mirror the inputs of
+    # actions/create-github-app-token, which generates them from GitHub's OpenAPI
+    # description of the installation access token endpoint. Each one maps to the
+    # API permission of the same name with dashes replaced by underscores.
     permission-actions:
       type: string
-      description: Actions permission level (read, write)
+      description: "The level of permission to grant the access token for GitHub Actions workflows, workflow runs, and artifacts. Can be set to 'read' or 'write'."
     permission-administration:
       type: string
-      description: Administration permission level (read, write)
+      description: "The level of permission to grant the access token for repository creation, deletion, settings, teams, and collaborators creation. Can be set to 'read' or 'write'."
+    permission-artifact-metadata:
+      type: string
+      description: "The level of permission to grant the access token to create and retrieve build artifact metadata records. Can be set to 'read' or 'write'."
+    permission-attestations:
+      type: string
+      description: "The level of permission to create and retrieve the access token for repository attestations. Can be set to 'read' or 'write'."
     permission-checks:
       type: string
-      description: Checks permission level (read, write)
+      description: "The level of permission to grant the access token for checks on code. Can be set to 'read' or 'write'."
     permission-codespaces:
       type: string
-      description: Codespaces permission level (read, write)
+      description: "The level of permission to grant the access token to create, edit, delete, and list Codespaces. Can be set to 'read' or 'write'."
     permission-contents:
       type: string
-      description: Contents permission level (read, write)
+      description: "The level of permission to grant the access token for repository contents, commits, branches, downloads, releases, and merges. Can be set to 'read' or 'write'."
+    permission-custom-properties-for-organizations:
+      type: string
+      description: "The level of permission to grant the access token to view and edit custom properties for an organization, when allowed by the property. Can be set to 'read' or 'write'."
+    permission-dependabot-secrets:
+      type: string
+      description: "The level of permission to grant the access token to manage Dependabot secrets. Can be set to 'read' or 'write'."
     permission-deployments:
       type: string
-      description: Deployments permission level (read, write)
+      description: "The level of permission to grant the access token for deployments and deployment statuses. Can be set to 'read' or 'write'."
+    permission-discussions:
+      type: string
+      description: "The level of permission to grant the access token for discussions and related comments and labels. Can be set to 'read' or 'write'."
+    permission-email-addresses:
+      type: string
+      description: "The level of permission to grant the access token to manage the email addresses belonging to a user. Can be set to 'read' or 'write'."
+    permission-enterprise-custom-properties-for-organizations:
+      type: string
+      description: "The level of permission to grant the access token for organization custom properties management at the enterprise level. Can be set to 'read', 'write', or 'admin'."
     permission-environments:
       type: string
-      description: Environments permission level (read, write)
+      description: "The level of permission to grant the access token for managing repository environments. Can be set to 'read' or 'write'."
+    permission-followers:
+      type: string
+      description: "The level of permission to grant the access token to manage the followers belonging to a user. Can be set to 'read' or 'write'."
+    permission-git-ssh-keys:
+      type: string
+      description: "The level of permission to grant the access token to manage git SSH keys. Can be set to 'read' or 'write'."
+    permission-gpg-keys:
+      type: string
+      description: "The level of permission to grant the access token to view and manage GPG keys belonging to a user. Can be set to 'read' or 'write'."
+    permission-interaction-limits:
+      type: string
+      description: "The level of permission to grant the access token to view and manage interaction limits on a repository. Can be set to 'read' or 'write'."
     permission-issues:
       type: string
-      description: Issues permission level (read, write)
+      description: "The level of permission to grant the access token for issues and related comments, assignees, labels, and milestones. Can be set to 'read' or 'write'."
+    permission-members:
+      type: string
+      description: "The level of permission to grant the access token for organization teams and members. Can be set to 'read' or 'write'."
+    permission-merge-queues:
+      type: string
+      description: "The level of permission to grant the access token to manage the merge queues for a repository. Can be set to 'read' or 'write'."
     permission-metadata:
       type: string
-      description: Metadata permission level (read, write)
+      description: "The level of permission to grant the access token to search repositories, list collaborators, and access repository metadata. Can be set to 'read' or 'write'."
+    permission-organization-administration:
+      type: string
+      description: "The level of permission to grant the access token to manage access to an organization. Can be set to 'read' or 'write'."
+    permission-organization-announcement-banners:
+      type: string
+      description: "The level of permission to grant the access token to view and manage announcement banners for an organization. Can be set to 'read' or 'write'."
+    permission-organization-copilot-seat-management:
+      type: string
+      description: "The level of permission to grant the access token for managing access to GitHub Copilot for members of an organization with a Copilot Business subscription. This property is in public preview and is subject to change. Can be set to 'write'."
+    permission-organization-custom-org-roles:
+      type: string
+      description: "The level of permission to grant the access token for custom organization roles management. Can be set to 'read' or 'write'."
+    permission-organization-custom-properties:
+      type: string
+      description: "The level of permission to grant the access token for repository custom properties management at the organization level. Can be set to 'read', 'write', or 'admin'."
+    permission-organization-custom-roles:
+      type: string
+      description: "The level of permission to grant the access token for custom repository roles management. Can be set to 'read' or 'write'."
+    permission-organization-events:
+      type: string
+      description: "The level of permission to grant the access token to view events triggered by an activity in an organization. Can be set to 'read'."
+    permission-organization-hooks:
+      type: string
+      description: "The level of permission to grant the access token to manage the post-receive hooks for an organization. Can be set to 'read' or 'write'."
+    permission-organization-packages:
+      type: string
+      description: "The level of permission to grant the access token for organization packages published to GitHub Packages. Can be set to 'read' or 'write'."
+    permission-organization-personal-access-token-requests:
+      type: string
+      description: "The level of permission to grant the access token for viewing and managing fine-grained personal access tokens that have been approved by an organization. Can be set to 'read' or 'write'."
+    permission-organization-personal-access-tokens:
+      type: string
+      description: "The level of permission to grant the access token for viewing and managing fine-grained personal access token requests to an organization. Can be set to 'read' or 'write'."
+    permission-organization-plan:
+      type: string
+      description: "The level of permission to grant the access token for viewing an organization's plan. Can be set to 'read'."
+    permission-organization-projects:
+      type: string
+      description: "The level of permission to grant the access token to manage organization projects and projects public preview (where available). Can be set to 'read', 'write', or 'admin'."
+    permission-organization-secrets:
+      type: string
+      description: "The level of permission to grant the access token to manage organization secrets. Can be set to 'read' or 'write'."
+    permission-organization-self-hosted-runners:
+      type: string
+      description: "The level of permission to grant the access token to view and manage GitHub Actions self-hosted runners available to an organization. Can be set to 'read' or 'write'."
+    permission-organization-user-blocking:
+      type: string
+      description: "The level of permission to grant the access token to view and manage users blocked by the organization. Can be set to 'read' or 'write'."
     permission-packages:
       type: string
-      description: Packages permission level (read, write)
+      description: "The level of permission to grant the access token for packages published to GitHub Packages. Can be set to 'read' or 'write'."
     permission-pages:
       type: string
-      description: Pages permission level (read, write)
+      description: "The level of permission to grant the access token to retrieve Pages statuses, configuration, and builds, as well as create new builds. Can be set to 'read' or 'write'."
+    permission-profile:
+      type: string
+      description: "The level of permission to grant the access token to manage the profile settings belonging to a user. Can be set to 'write'."
     permission-pull-requests:
       type: string
-      description: Pull requests permission level (read, write)
+      description: "The level of permission to grant the access token for pull requests and related comments, assignees, labels, milestones, and merges. Can be set to 'read' or 'write'."
+    permission-repository-custom-properties:
+      type: string
+      description: "The level of permission to grant the access token to view and edit custom properties for a repository, when allowed by the property. Can be set to 'read' or 'write'."
     permission-repository-hooks:
       type: string
-      description: Repository hooks permission level (read, write)
+      description: "The level of permission to grant the access token to manage the post-receive hooks for a repository. Can be set to 'read' or 'write'."
     permission-repository-projects:
       type: string
-      description: Repository projects permission level (read, write)
+      description: "The level of permission to grant the access token to manage repository projects, columns, and cards. Can be set to 'read', 'write', or 'admin'."
+    permission-secret-scanning-alerts:
+      type: string
+      description: "The level of permission to grant the access token to view and manage secret scanning alerts. Can be set to 'read' or 'write'."
+    permission-secrets:
+      type: string
+      description: "The level of permission to grant the access token to manage repository secrets. Can be set to 'read' or 'write'."
     permission-security-events:
       type: string
-      description: Security events permission level (read, write)
+      description: "The level of permission to grant the access token to view and manage security events like code scanning alerts. Can be set to 'read' or 'write'."
+    permission-single-file:
+      type: string
+      description: "The level of permission to grant the access token to manage just a single file. Can be set to 'read' or 'write'."
+    permission-starring:
+      type: string
+      description: "The level of permission to grant the access token to list and manage repositories a user is starring. Can be set to 'read' or 'write'."
     permission-statuses:
       type: string
-      description: Statuses permission level (read, write)
+      description: "The level of permission to grant the access token for commit statuses. Can be set to 'read' or 'write'."
+    permission-team-discussions:
+      type: string
+      description: "The level of permission to grant the access token to manage team discussions and related comments. Can be set to 'read' or 'write'."
     permission-vulnerability-alerts:
       type: string
-      description: Vulnerability alerts permission level (read, write)
+      description: "The level of permission to grant the access token to manage Dependabot alerts. Can be set to 'read' or 'write'."
+    permission-workflows:
+      type: string
+      description: "The level of permission to grant the access token to update GitHub Actions workflow files. Can be set to 'write'."
+    # Deprecated: this plugin's original name for `permission-members`, kept
+    # working so existing pipelines do not break. Prefer `permission-members`,
+    # which is what actions/create-github-app-token calls it.
+    permission-organization-members:
+      type: string
+      description: "Deprecated alias for permission-members."
   required:
     - app-id
     - private-key

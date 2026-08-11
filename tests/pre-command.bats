@@ -98,8 +98,86 @@ exported_env() {
   run bash "$PRE_COMMAND"
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *'"contents": "read"'* ]]
-  [[ "$output" == *'"pull_requests": "write"'* ]]
+  [ "$(token_request_body | jq -r '.permissions.contents')" = "read" ]
+  [ "$(token_request_body | jq -r '.permissions.pull_requests')" = "write" ]
+}
+
+# Renovate — and anything else that edits .github/workflows — needs `workflows`,
+# which is a different app permission from `actions` (workflow runs and
+# artifacts). Both are requestable.
+@test "requests the workflows permission, which editing workflow files needs" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_WORKFLOWS="write"
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_ACTIONS="read"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(token_request_body | jq -r '.permissions.workflows')" = "write" ]
+  [ "$(token_request_body | jq -r '.permissions.actions')" = "read" ]
+}
+
+@test "requests permissions beyond the repository-scoped ones" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_MEMBERS="read"
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_ORGANIZATION_PROJECTS="write"
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_SECRET_SCANNING_ALERTS="read"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(token_request_body | jq -r '.permissions.members')" = "read" ]
+  [ "$(token_request_body | jq -r '.permissions.organization_projects')" = "write" ]
+  [ "$(token_request_body | jq -r '.permissions.secret_scanning_alerts')" = "read" ]
+}
+
+@test "still honours the deprecated permission-organization-members" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_ORGANIZATION_MEMBERS="read"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  # The API permission has always been `members`; the old option name must not
+  # reach GitHub as `organization_members`, which it would reject.
+  [ "$(token_request_body | jq -r '.permissions.members')" = "read" ]
+  [ "$(token_request_body | jq -r '.permissions | has("organization_members")')" = "false" ]
+  [[ "$output" == *"deprecated"* ]]
+}
+
+@test "omits permissions entirely when none are configured" {
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  # An absent `permissions` key makes the token inherit the installation's
+  # permissions; an empty object would grant nothing.
+  [ "$(token_request_body | jq -r 'has("permissions")')" = "false" ]
+}
+
+@test "scopes the token to a comma-separated repository list" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES="repo1, repo2"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(token_request_body | jq -c '.repositories')" = '["repo1","repo2"]' ]
+}
+
+@test "scopes the token to a newline-separated repository list" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES="repo1
+repo2
+repo3"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  # The YAML block-scalar form the README documents: every entry has to survive,
+  # not just the first line.
+  [ "$(token_request_body | jq -c '.repositories')" = '["repo1","repo2","repo3"]' ]
+}
+
+@test "omits repositories when none are configured" {
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(token_request_body | jq -r 'has("repositories")')" = "false" ]
 }
 
 @test "fails when app-id is missing" {

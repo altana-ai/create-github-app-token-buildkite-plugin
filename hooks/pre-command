@@ -4,6 +4,7 @@ set -euo pipefail
 echo "--- :github: Creating GitHub App Token"
 
 PLUGIN_PREFIX="CREATE_GITHUB_APP_TOKEN"
+PERMISSION_PREFIX="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_PERMISSION_"
 
 # Plugin configuration reader function
 function plugin_read_config() {
@@ -31,28 +32,6 @@ output_variable=$(plugin_read_config "OUTPUT_VARIABLE" "GITHUB_TOKEN")
 
 # Clean null bytes and other problematic characters from private key
 private_key=$(echo "$private_key" | tr -d '\0' | tr -d '\r')
-
-# Get permission configurations
-permission_actions=$(plugin_read_config "PERMISSION_ACTIONS")
-permission_administration=$(plugin_read_config "PERMISSION_ADMINISTRATION")
-permission_checks=$(plugin_read_config "PERMISSION_CHECKS")
-permission_codespaces=$(plugin_read_config "PERMISSION_CODESPACES")
-permission_contents=$(plugin_read_config "PERMISSION_CONTENTS")
-permission_deployments=$(plugin_read_config "PERMISSION_DEPLOYMENTS")
-permission_environments=$(plugin_read_config "PERMISSION_ENVIRONMENTS")
-permission_issues=$(plugin_read_config "PERMISSION_ISSUES")
-permission_metadata=$(plugin_read_config "PERMISSION_METADATA")
-permission_packages=$(plugin_read_config "PERMISSION_PACKAGES")
-permission_pages=$(plugin_read_config "PERMISSION_PAGES")
-permission_pull_requests=$(plugin_read_config "PERMISSION_PULL_REQUESTS")
-permission_repository_hooks=$(plugin_read_config "PERMISSION_REPOSITORY_HOOKS")
-permission_repository_projects=$(plugin_read_config "PERMISSION_REPOSITORY_PROJECTS")
-permission_security_events=$(plugin_read_config "PERMISSION_SECURITY_EVENTS")
-permission_statuses=$(plugin_read_config "PERMISSION_STATUSES")
-permission_vulnerability_alerts=$(plugin_read_config "PERMISSION_VULNERABILITY_ALERTS")
-
-# Get organization permission configurations
-permission_organization_members=$(plugin_read_config "PERMISSION_ORGANIZATION_MEMBERS")
 
 # Validate required inputs
 if [[ -z "$app_id" ]]; then
@@ -233,59 +212,79 @@ get_installation_id() {
 }
 
 # Function to build permissions JSON
+#
+# Every `permission-*` option is passed through to the API, rather than a
+# hardcoded subset: GitHub adds app permissions regularly, and
+# actions/create-github-app-token generates its own list from GitHub's OpenAPI
+# description. `permission-<name>` becomes the API permission `<name>` with
+# dashes replaced by underscores, which is the same rule the action applies.
+#
+# Emits the permissions object, or `{}` when none were configured — in which case
+# the token inherits every permission the app installation has.
 build_permissions_json() {
-  local permissions=()
+  local -a args=()
+  local var key value
 
-  # Repository permissions
-  [[ -n "$permission_actions" ]] && permissions+=("\"actions\": \"$permission_actions\"")
-  [[ -n "$permission_administration" ]] && permissions+=("\"administration\": \"$permission_administration\"")
-  [[ -n "$permission_checks" ]] && permissions+=("\"checks\": \"$permission_checks\"")
-  [[ -n "$permission_codespaces" ]] && permissions+=("\"codespaces\": \"$permission_codespaces\"")
-  [[ -n "$permission_contents" ]] && permissions+=("\"contents\": \"$permission_contents\"")
-  [[ -n "$permission_deployments" ]] && permissions+=("\"deployments\": \"$permission_deployments\"")
-  [[ -n "$permission_environments" ]] && permissions+=("\"environments\": \"$permission_environments\"")
-  [[ -n "$permission_issues" ]] && permissions+=("\"issues\": \"$permission_issues\"")
-  [[ -n "$permission_metadata" ]] && permissions+=("\"metadata\": \"$permission_metadata\"")
-  [[ -n "$permission_packages" ]] && permissions+=("\"packages\": \"$permission_packages\"")
-  [[ -n "$permission_pages" ]] && permissions+=("\"pages\": \"$permission_pages\"")
-  [[ -n "$permission_pull_requests" ]] && permissions+=("\"pull_requests\": \"$permission_pull_requests\"")
-  [[ -n "$permission_repository_hooks" ]] && permissions+=("\"repository_hooks\": \"$permission_repository_hooks\"")
-  [[ -n "$permission_repository_projects" ]] && permissions+=("\"repository_projects\": \"$permission_repository_projects\"")
-  [[ -n "$permission_security_events" ]] && permissions+=("\"security_events\": \"$permission_security_events\"")
-  [[ -n "$permission_statuses" ]] && permissions+=("\"statuses\": \"$permission_statuses\"")
-  [[ -n "$permission_vulnerability_alerts" ]] && permissions+=("\"vulnerability_alerts\": \"$permission_vulnerability_alerts\"")
+  while IFS= read -r var; do
+    value="${!var}"
+    [[ -n "$value" ]] || continue
 
-  # Organization permissions
-  [[ -n "$permission_organization_members" ]] && permissions+=("\"members\": \"$permission_organization_members\"")
+    key=$(permission_api_key "${var#"${PERMISSION_PREFIX}"}")
+    args+=(--arg "$key" "$value")
+  done < <(compgen -e | grep "^${PERMISSION_PREFIX}" | sort)
 
-  if [[ ${#permissions[@]} -gt 0 ]]; then
-    local IFS=','
-    echo "{\"permissions\": {${permissions[*]}}}"
-  else
-    echo "{}"
+  if [[ ${#args[@]} -eq 0 ]]; then
+    echo '{}'
+    return
   fi
+
+  # jq assembles the object so a permission name or value can never break the
+  # JSON, whatever GitHub names things next.
+  jq -nc '$ARGS.named' "${args[@]}"
+}
+
+# Function to map a plugin option suffix to an API permission name
+#
+# Buildkite upper-cases and underscores option names, so PULL_REQUESTS is
+# `permission-pull-requests` is the API's `pull_requests`.
+permission_api_key() {
+  local key
+  key=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+
+  # This plugin shipped `permission-organization-members` before adopting the
+  # action's naming; the API permission has always been `members`.
+  if [[ "$key" == "organization_members" ]]; then
+    echo "⚠️  permission-organization-members is deprecated, use permission-members" >&2
+    key="members"
+  fi
+
+  echo "$key"
 }
 
 # Function to build repositories array
+#
+# Accepts the comma-separated and the newline-separated (YAML block scalar) forms
+# the README documents, and emits a JSON array, or `null` for "every repository
+# the installation can see".
 build_repositories_json() {
-  if [[ -n "$repositories" ]]; then
-    # Convert comma or newline-separated list to JSON array
-    local repo_array=()
-    IFS=$'\n,' read -ra REPO_LIST <<< "$repositories"
-    for repo in "${REPO_LIST[@]}"; do
-      repo=$(echo "$repo" | xargs)  # Trim whitespace
-      [[ -n "$repo" ]] && repo_array+=("\"$repo\"")
-    done
+  local -a repos=()
+  local repo
 
-    if [[ ${#repo_array[@]} -gt 0 ]]; then
-      local IFS=','
-      echo "[${repo_array[*]}]"
-    else
-      echo "null"
-    fi
-  else
+  # `read -ra` would stop at the first newline however IFS is set, so the two
+  # separators are normalised to one and the input is read line by line.
+  while IFS= read -r repo; do
+    # Trim surrounding whitespace.
+    repo="${repo#"${repo%%[![:space:]]*}"}"
+    repo="${repo%"${repo##*[![:space:]]}"}"
+    [[ -n "$repo" ]] && repos+=("$repo")
+  done < <(printf '%s\n' "$repositories" | tr ',' '\n')
+
+  if [[ ${#repos[@]} -eq 0 ]]; then
     echo "null"
+    return
   fi
+
+  jq -nc '$ARGS.positional' --args "${repos[@]}"
 }
 
 # Function to generate installation access token
@@ -293,23 +292,19 @@ generate_installation_token() {
   local jwt_token="$1"
   local installation_id="$2"
 
-  # Build request body
+  # Build request body. Both keys are omitted when not configured: an absent
+  # `permissions` inherits the installation's permissions, and an absent
+  # `repositories` grants access to all of them.
   local permissions_json repositories_json request_body
   permissions_json=$(build_permissions_json)
   repositories_json=$(build_repositories_json)
 
-  # Combine permissions and repositories into request body
-  if [[ "$permissions_json" == "{}" && "$repositories_json" == "null" ]]; then
-    request_body="{}"
-  elif [[ "$permissions_json" == "{}" ]]; then
-    request_body="{\"repositories\": $repositories_json}"
-  elif [[ "$repositories_json" == "null" ]]; then
-    request_body="$permissions_json"
-  else
-    # Merge permissions and repositories JSON
-    request_body="${permissions_json%\}}"
-    request_body="${request_body}, \"repositories\": ${repositories_json}}"
-  fi
+  request_body=$(jq -nc \
+    --argjson permissions "$permissions_json" \
+    --argjson repositories "$repositories_json" \
+    '{}
+     | if ($permissions | length) > 0 then .permissions = $permissions else . end
+     | if $repositories != null then .repositories = $repositories else . end')
 
   # Log the token request payload
   echo "📋 Token request payload: $request_body" >&2

@@ -12,7 +12,7 @@ Generate a GitHub App token and use it to authenticate with GitHub:
 steps:
   - label: "Generate GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -84,85 +84,96 @@ Default: `GITHUB_TOKEN`
 
 Example: `"CUSTOM_TOKEN_VAR"`
 
-### Permission Parameters
+### Permission parameters
 
-You can specify granular permissions for the generated token. Each permission can be set to `"read"` or `"write"`.
+Each `permission-*` option sets one permission on the minted token, to `read` or
+`write` (a few, such as `permission-workflows`, only accept `write`). The option
+name maps to the API permission of the same name with dashes replaced by
+underscores, so `permission-pull-requests` requests `pull_requests`.
 
-#### `permission-actions` (string)
+The list mirrors the inputs of
+[`actions/create-github-app-token`](https://github.com/actions/create-github-app-token),
+which generates it from GitHub's OpenAPI description of the
+[create installation access token](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
+endpoint.
 
-Actions workflows permission level.
+When no `permission-*` option is set, the token inherits every permission the app
+installation has. Setting even one narrows the token to exactly what you list, so
+list everything the step needs.
 
-#### `permission-administration` (string)
+> [!IMPORTANT]
+> `permission-actions` and `permission-workflows` are different permissions.
+> `actions` covers workflow runs and artifacts; `workflows` is what lets a token
+> **create or update files under `.github/workflows/`**. A bot that opens pull
+> requests touching workflow files — Renovate, for instance — needs
+> `permission-workflows: write`, and GitHub rejects the push with a
+> `refusing to allow a GitHub App to create or update workflow` error without it.
 
-Repository administration permission level.
+#### Repository permissions
 
-#### `permission-checks` (string)
+- `permission-actions`
+- `permission-administration`
+- `permission-artifact-metadata`
+- `permission-attestations`
+- `permission-checks`
+- `permission-codespaces`
+- `permission-contents`
+- `permission-dependabot-secrets`
+- `permission-deployments`
+- `permission-discussions`
+- `permission-environments`
+- `permission-issues`
+- `permission-merge-queues`
+- `permission-metadata`
+- `permission-packages`
+- `permission-pages`
+- `permission-pull-requests`
+- `permission-repository-custom-properties`
+- `permission-repository-hooks`
+- `permission-repository-projects`
+- `permission-secret-scanning-alerts`
+- `permission-secrets`
+- `permission-security-events`
+- `permission-single-file`
+- `permission-statuses`
+- `permission-vulnerability-alerts`
+- `permission-workflows`
 
-Code checks permission level.
+#### Organization and user permissions
 
-#### `permission-codespaces` (string)
+- `permission-custom-properties-for-organizations`
+- `permission-email-addresses`
+- `permission-enterprise-custom-properties-for-organizations`
+- `permission-followers`
+- `permission-git-ssh-keys`
+- `permission-gpg-keys`
+- `permission-interaction-limits`
+- `permission-members`
+- `permission-organization-administration`
+- `permission-organization-announcement-banners`
+- `permission-organization-copilot-seat-management`
+- `permission-organization-custom-org-roles`
+- `permission-organization-custom-properties`
+- `permission-organization-custom-roles`
+- `permission-organization-events`
+- `permission-organization-hooks`
+- `permission-organization-packages`
+- `permission-organization-personal-access-token-requests`
+- `permission-organization-personal-access-tokens`
+- `permission-organization-plan`
+- `permission-organization-projects`
+- `permission-organization-secrets`
+- `permission-organization-self-hosted-runners`
+- `permission-organization-user-blocking`
+- `permission-profile`
+- `permission-starring`
+- `permission-team-discussions`
 
-Codespaces management permission level.
+#### Deprecated
 
-#### `permission-contents` (string)
-
-Repository contents permission level.
-
-#### `permission-deployments` (string)
-
-Deployments permission level.
-
-#### `permission-environments` (string)
-
-Environments permission level.
-
-#### `permission-issues` (string)
-
-Issues permission level.
-
-#### `permission-metadata` (string)
-
-Repository metadata permission level.
-
-#### `permission-packages` (string)
-
-Packages permission level.
-
-#### `permission-pages` (string)
-
-GitHub Pages permission level.
-
-#### `permission-pull-requests` (string)
-
-Pull requests permission level.
-
-#### `permission-repository-hooks` (string)
-
-Repository webhooks permission level.
-
-#### `permission-repository-projects` (string)
-
-Repository projects permission level.
-
-#### `permission-security-events` (string)
-
-Security events permission level.
-
-#### `permission-statuses` (string)
-
-Commit statuses permission level.
-
-#### `permission-vulnerability-alerts` (string)
-
-Vulnerability alerts permission level.
-
-### Organization Permission Parameters
-
-You can specify granular organization-level permissions for the generated token. Each permission can be set to `"read"` or `"write"`.
-
-#### `permission-organization-members` (string)
-
-Organization members permission level. Allows access to organization member information.
+- `permission-organization-members` — this plugin's original name for
+  `permission-members`. Still honoured, and still mapped to the `members` API
+  permission, but it logs a warning; prefer `permission-members`.
 
 ## Usage Examples
 
@@ -172,7 +183,7 @@ Organization members permission level. Allows access to organization member info
 steps:
   - label: "Use GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
@@ -186,7 +197,7 @@ steps:
 steps:
   - label: "Scoped GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           repositories: "repo1,repo2"
@@ -204,13 +215,32 @@ steps:
 steps:
   - label: "Organization Members Access"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
-          permission-organization-members: "read"
+          permission-members: "read"
     command: |
       # Token can access organization member information
       gh api orgs/myorg/members
+```
+
+### For a Bot That Updates Workflow Files
+
+Editing `.github/workflows/**` needs `permission-workflows`, which is separate
+from `permission-actions`:
+
+```yaml
+steps:
+  - label: ":robot_face: renovate"
+    plugins:
+      - altana-ai/create-github-app-token#v0.6.0:
+          app-id: "$$RENOVATE_APP_ID"
+          private-key: "$$RENOVATE_APP_PRIVATE_KEY"
+          permission-contents: "write"
+          permission-pull-requests: "write"
+          permission-issues: "write"
+          permission-workflows: "write"
+      - altana-ai/renovate#v0.1.1: ~
 ```
 
 ### GitHub Enterprise Server
@@ -219,7 +249,7 @@ steps:
 steps:
   - label: "Enterprise GitHub App Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           github-api-url: "https://github.company.com/api/v3"
@@ -234,7 +264,7 @@ steps:
 steps:
   - label: "Long-lived Token"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           skip-token-revoke: "true"
@@ -249,7 +279,7 @@ steps:
 steps:
   - label: "Custom Token Variable"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
           output-variable: "MY_GITHUB_TOKEN"
@@ -274,7 +304,7 @@ Then reference them in your pipeline:
 steps:
   - label: "Generate Token with Secrets"
     plugins:
-      - altana-ai/create-github-app-token#v0.5.0:
+      - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
