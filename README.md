@@ -290,26 +290,56 @@ steps:
 
 ### Using Buildkite Secrets (Recommended)
 
-Create a `.buildkite/hooks/pre-command` script to securely retrieve secrets:
-
-```bash
-#!/bin/bash
-export GITHUB_APP_ID=$(buildkite-agent secret get GITHUB_APP_ID)
-export GITHUB_APP_PRIVATE_KEY=$(buildkite-agent secret get GITHUB_APP_PRIVATE_KEY)
-```
-
-Then reference them in your pipeline:
+Map [Buildkite secrets](https://buildkite.com/docs/pipelines/security/secrets/buildkite-secrets)
+to the environment variables this plugin reads with the `secrets` step attribute.
+It needs agent 3.106.0 or later, secrets are scoped to the agent's cluster, and
+their values are redacted from build logs automatically:
 
 ```yaml
 steps:
   - label: "Generate Token with Secrets"
+    secrets:
+      GITHUB_APP_ID: my_github_app_id
+      GITHUB_APP_PRIVATE_KEY: my_github_app_private_key
     plugins:
       - altana-ai/create-github-app-token#v0.6.0:
           app-id: "$$GITHUB_APP_ID"
           private-key: "$$GITHUB_APP_PRIVATE_KEY"
     command: |
-      echo "Token generated securely using Buildkite secrets"
+      gh api user
 ```
+
+The `$$` stops Buildkite interpolating the variable when the pipeline is
+uploaded, so the plugin resolves it on the agent, where the secret exists.
+
+### Restricting Who Can Read the Private Key
+
+The private key is long-lived, and anything that can read it can mint tokens for
+every repository the app is installed on. A Buildkite secret is readable by every
+agent in its cluster by default, so attach an
+[access policy](https://buildkite.com/docs/pipelines/security/secrets/buildkite-secrets/access-policies)
+to it — the cluster's secret → **Access** tab → *Restrict access to agents
+matching a policy*:
+
+```yaml
+# Only this pipeline, and only when Buildkite itself started the build.
+- pipeline_id:
+    - "01234567-89ab-cdef-0123-456789abcdef"
+  build_source:
+    - "schedule"
+    - "ui"
+```
+
+Claims within a rule are ANDed, values within a claim are ORed, rules are ORed,
+and access is denied when nothing matches. Prefer the first-party claims
+(`pipeline_id`, `build_source`, `cluster_queue_id`), which Buildkite generates;
+the third-party ones (`pipeline_slug`, `build_branch`, `build_creator`) are
+convenient but derive from user- or tool-supplied values, so they make a weaker
+boundary.
+
+Restricting `build_source` is what stops a pull request against the pipeline's own
+repository from reading the key — an untrusted branch cannot mint a token even if
+it rewrites the pipeline.
 
 ## Security Features
 
