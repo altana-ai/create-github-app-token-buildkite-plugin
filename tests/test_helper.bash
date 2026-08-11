@@ -49,6 +49,13 @@ setup_test_env() {
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OWNER
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES
+
+  # Permissions are read by scanning the environment, so a stray export from the
+  # developer's shell would end up in the token request.
+  local permission
+  while IFS= read -r permission; do
+    unset "$permission"
+  done < <(compgen -e | grep '^BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSION_' || true)
 }
 
 teardown_test_env() {
@@ -58,6 +65,12 @@ teardown_test_env() {
 # Every curl invocation, one per line, in call order.
 curl_calls() {
   cat "$CURL_LOG"
+}
+
+# The JSON body posted to the access_tokens endpoint. It is compact, so it is the
+# only whitespace-free `{...}` field in the recorded invocation.
+token_request_body() {
+  sed -n 's/.* -d \({[^ ]*}\).*/\1/p' "$CURL_LOG"
 }
 
 # Run pre-command and then post-command the way buildkite-agent does: the hook
