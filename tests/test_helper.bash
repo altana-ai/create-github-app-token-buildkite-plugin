@@ -3,6 +3,7 @@
 #
 # The hooks talk to the GitHub API with curl and to the agent with
 # buildkite-agent; both are replaced by stubs on PATH so the tests are hermetic.
+# sleep is stubbed too, so retry backoff is recorded rather than waited out.
 # openssl is *not* stubbed — a throwaway RSA key is generated once per file so
 # the JWT signing path runs for real.
 
@@ -28,11 +29,13 @@ setup_test_env() {
   TEST_TMPDIR="$(mktemp -d)"
   CURL_LOG="${TEST_TMPDIR}/curl.log"
   REDACTOR_LOG="${TEST_TMPDIR}/redactor.log"
+  SLEEP_LOG="${TEST_TMPDIR}/sleep.log"
   : > "$CURL_LOG"
   : > "$REDACTOR_LOG"
+  : > "$SLEEP_LOG"
 
   PATH="${BATS_TEST_DIRNAME}/stubs:${PATH}"
-  export PATH CURL_LOG REDACTOR_LOG
+  export PATH CURL_LOG REDACTOR_LOG SLEEP_LOG
 
   export STUB_ACCESS_TOKEN="ghs_stubaccesstoken"
   export STUB_INSTALLATION_ID="87654321"
@@ -49,6 +52,8 @@ setup_test_env() {
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OWNER
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES
+  unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_MAX_ATTEMPTS
+  unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_MAX_RETRY_WAIT
 
   # Permissions are read by scanning the environment, so a stray export from the
   # developer's shell would end up in the token request.
@@ -65,6 +70,16 @@ teardown_test_env() {
 # Every curl invocation, one per line, in call order.
 curl_calls() {
   cat "$CURL_LOG"
+}
+
+# How many requests went to URLs ending in the given path.
+calls_to() {
+  grep -c -- "${1}\$" "$CURL_LOG"
+}
+
+# Every delay the hook slept for, one per line.
+sleeps() {
+  cat "$SLEEP_LOG"
 }
 
 # The JSON body posted to the access_tokens endpoint. It is compact, so it is the

@@ -2,15 +2,61 @@
 # Stub for curl. Records the invocation in $CURL_LOG and answers the three
 # GitHub API endpoints the hooks call.
 #
-# The hooks pass `-w "%{http_code}"` on the GET and the DELETE, so those
-# responses append the status code to the body the way real curl does. The POST
-# does not, so it returns a bare JSON body.
+# pre-command writes the body to `-o` and the headers to `-D`, and prints the
+# status with `-w "%{http_code}"`. post-command's DELETE passes no `-o`, so its
+# body and status both go to stdout, the way real curl does.
+#
+# STUB_INSTALLATION_HTTP_CODE and STUB_ACCESS_TOKEN_HTTP_CODE are space-separated
+# lists: the nth request to an endpoint gets the nth entry, and the last entry
+# repeats. An `exit:N` entry fails like a transport error, with curl exit code N.
 set -uo pipefail
 
 printf '%s\n' "$*" >> "$CURL_LOG"
 
 # curl is always invoked with the URL as the final argument.
 url="${!#}"
+
+body_file=/dev/stdout
+header_file=/dev/null
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) body_file="$2"; shift ;;
+    -D) header_file="$2"; shift ;;
+  esac
+  shift
+done
+
+# The entry of a code list that answers this request.
+pick_code() {
+  local -a codes
+  local calls
+  read -ra codes <<< "$1"
+  calls=$(grep -cF -- "$url" "$CURL_LOG")
+  (( calls > ${#codes[@]} )) && calls=${#codes[@]}
+  echo "${codes[calls - 1]}"
+}
+
+respond() {
+  local http_code="$1" body="$2"
+
+  if [[ "$http_code" == exit:* ]]; then
+    printf '000'
+    exit "${http_code#exit:}"
+  fi
+
+  {
+    printf 'HTTP/2 %s\r\n' "$http_code"
+    if [[ "$http_code" != 2?? && -n "${STUB_RETRY_AFTER:-}" ]]; then
+      printf 'retry-after: %s\r\n' "$STUB_RETRY_AFTER"
+    fi
+    if [[ "$http_code" != 2?? && -n "${STUB_RATELIMIT_RESET:-}" ]]; then
+      printf 'x-ratelimit-remaining: 0\r\nx-ratelimit-reset: %s\r\n' "$STUB_RATELIMIT_RESET"
+    fi
+    printf '\r\n'
+  } > "$header_file"
+  printf '%s' "$body" > "$body_file"
+  printf '%s' "$http_code"
+}
 
 case "$url" in
   */installation/token)
@@ -19,19 +65,20 @@ case "$url" in
     ;;
   */installation)
     # GET — installation lookup for the repository.
-    http_code="${STUB_INSTALLATION_HTTP_CODE:-200}"
+    http_code=$(pick_code "${STUB_INSTALLATION_HTTP_CODE:-200}")
     if [[ "$http_code" == "200" ]]; then
-      printf '{"id":%s}%s' "${STUB_INSTALLATION_ID:-87654321}" "$http_code"
+      respond "$http_code" "{\"id\":${STUB_INSTALLATION_ID:-87654321}}"
     else
-      printf '{"message":"stubbed failure"}%s' "$http_code"
+      respond "$http_code" '{"message":"stubbed failure"}'
     fi
     ;;
   */access_tokens)
     # POST — mint an installation access token.
-    if [[ "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
-      printf '{"message":"stubbed failure"}'
+    http_code=$(pick_code "${STUB_ACCESS_TOKEN_HTTP_CODE:-201}")
+    if [[ "$http_code" != "201" || "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
+      respond "$http_code" '{"message":"stubbed failure"}'
     else
-      printf '{"token":"%s","expires_at":"2099-01-01T00:00:00Z"}' "$STUB_ACCESS_TOKEN"
+      respond "$http_code" "{\"token\":\"${STUB_ACCESS_TOKEN}\",\"expires_at\":\"2099-01-01T00:00:00Z\"}"
     fi
     ;;
   *)

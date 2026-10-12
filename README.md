@@ -84,6 +84,21 @@ Default: `GITHUB_TOKEN`
 
 Example: `"CUSTOM_TOKEN_VAR"`
 
+#### `max-attempts` (integer)
+
+How many times each GitHub API request is attempted before the step fails. Only
+transient failures are retried; see [Retries](#retries).
+
+Default: `5`
+
+#### `max-retry-wait` (integer)
+
+The most seconds one request may spend waiting between attempts. A retry that
+would take the total past this limit, such as a long `Retry-After`, fails the
+step instead.
+
+Default: `60`
+
 ### Permission parameters
 
 Each `permission-*` option sets one permission on the minted token, to `read` or
@@ -359,6 +374,25 @@ it rewrites the pipeline.
 5. **Security Setup**: Adds the token to Buildkite's redactor and exports it as an environment variable
 6. **Cleanup**: Removes the token from the environment after command execution
 
+### Retries
+
+The installation lookup and the token request each retry transient failures:
+
+- curl transport errors: connection refused or reset, DNS, TLS, timeouts
+- HTTP 429 and 5xx
+- HTTP 403 when it is a rate limit (a `Retry-After` header, or
+  `x-ratelimit-remaining: 0`)
+
+The wait before the next attempt is the server's `Retry-After`, else the time
+until `x-ratelimit-reset` when the rate limit is exhausted, else exponential
+backoff with jitter: 2-3s, 4-7s, 8-15s, 16-31s. With the defaults the worst case
+is about a minute of waiting. Every request has a 10s connect timeout and a 30s
+overall timeout, and signs a fresh JWT, so a retry never sends an expired one.
+
+Anything else, such as 401, 404 or 422, fails at once. Each failed attempt logs
+its attempt number, the HTTP status or curl exit code, and the response body;
+neither the JWT nor the minted token is logged.
+
 ### Environment Variable Expansion
 
 The plugin supports referencing environment variables using the `$VARIABLE_NAME` syntax for the `app-id` and `private-key` parameters. This allows you to keep sensitive values out of your pipeline configuration:
@@ -401,7 +435,10 @@ This error replaces the generic "Failed to get installation ID" message and prov
 
 ### Error: Failed to generate installation token
 
-This typically indicates:
+The message names the HTTP status, or `HTTP 000` when no response arrived; the
+attempt log above it shows each failure. A transient failure that outlasted the
+retries reads `still failing after N attempts`. Otherwise this typically
+indicates:
 
 1. Invalid private key format
 2. Clock skew (JWT timestamps are invalid)
