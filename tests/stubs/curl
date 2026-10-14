@@ -8,7 +8,9 @@
 #
 # STUB_INSTALLATION_HTTP_CODE and STUB_ACCESS_TOKEN_HTTP_CODE are space-separated
 # lists: the nth request to an endpoint gets the nth entry, and the last entry
-# repeats. An `exit:N` entry fails like a transport error, with curl exit code N.
+# repeats. An `exit:N` entry fails like a transport error, with curl exit code N;
+# `exit:N:CODE` sends status CODE and part of its body before failing that way.
+# STUB_ERROR_MESSAGE sets the message of every error body.
 set -uo pipefail
 
 printf '%s\n' "$*" >> "$CURL_LOG"
@@ -40,8 +42,14 @@ respond() {
   local http_code="$1" body="$2"
 
   if [[ "$http_code" == exit:* ]]; then
-    printf '000'
-    exit "${http_code#exit:}"
+    local curl_exit status
+    IFS=: read -r _ curl_exit status <<< "$http_code"
+    if [[ -n "$status" ]]; then
+      printf 'HTTP/2 %s\r\n\r\n' "$status" > "$header_file"
+      printf '%s' "${body:0:20}" > "$body_file"
+    fi
+    printf '%s' "${status:-000}"
+    exit "$curl_exit"
   fi
 
   {
@@ -58,6 +66,8 @@ respond() {
   printf '%s' "$http_code"
 }
 
+error_body="{\"message\":\"${STUB_ERROR_MESSAGE:-stubbed failure}\"}"
+
 case "$url" in
   */installation/token)
     # DELETE — token revocation. 204 is success; no body.
@@ -69,14 +79,14 @@ case "$url" in
     if [[ "$http_code" == "200" ]]; then
       respond "$http_code" "{\"id\":${STUB_INSTALLATION_ID:-87654321}}"
     else
-      respond "$http_code" '{"message":"stubbed failure"}'
+      respond "$http_code" "$error_body"
     fi
     ;;
   */access_tokens)
     # POST — mint an installation access token.
     http_code=$(pick_code "${STUB_ACCESS_TOKEN_HTTP_CODE:-201}")
-    if [[ "$http_code" != "201" || "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
-      respond "$http_code" '{"message":"stubbed failure"}'
+    if [[ "${http_code#exit:*:}" != "201" || "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
+      respond "$http_code" "$error_body"
     else
       respond "$http_code" "{\"token\":\"${STUB_ACCESS_TOKEN}\",\"expires_at\":\"2099-01-01T00:00:00Z\"}"
     fi

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Stub for date. With STUB_NOW set, `date +%s` reads a simulated clock that
+# starts at STUB_NOW and advances by every delay the sleep stub recorded, so
+# tests can check expiry and reset arithmetic exactly. Anything else runs the
+# real date.
+set -uo pipefail
+
+if [[ -n "${STUB_NOW:-}" && "$*" == "+%s" ]]; then
+  awk -v now="$STUB_NOW" '{ now += $1 } END { print now }' "$SLEEP_LOG"
+  exit
+fi
+
+PATH="${PATH//"$(dirname "$0"):"/}" exec date "$@"

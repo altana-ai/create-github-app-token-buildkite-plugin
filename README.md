@@ -378,20 +378,44 @@ it rewrites the pipeline.
 
 The installation lookup and the token request each retry transient failures:
 
-- curl transport errors: connection refused or reset, DNS, TLS, timeouts
+- curl transport errors: exits 5, 6, 7, 16, 18, 28, 35, 52, 55, 56 and 92, which
+  cover DNS, connection, HTTP/2, partial transfers, timeouts, the TLS handshake
+  and dropped connections. Other exits, such as a malformed URL (3) or a
+  certificate that fails verification (60), are configuration errors and fail at
+  once.
 - HTTP 429 and 5xx
-- HTTP 403 when it is a rate limit (a `Retry-After` header, or
-  `x-ratelimit-remaining: 0`)
+- HTTP 403 when it is a rate limit: a `Retry-After` header,
+  `x-ratelimit-remaining: 0`, or a body that names a secondary rate limit
 
-The wait before the next attempt is the server's `Retry-After`, else the time
-until `x-ratelimit-reset` when the rate limit is exhausted, else exponential
-backoff with jitter: 2-3s, 4-7s, 8-15s, 16-31s. With the defaults the worst case
-is about a minute of waiting. Every request has a 10s connect timeout and a 30s
-overall timeout, and signs a fresh JWT, so a retry never sends an expired one.
+The wait before the next attempt is chosen in this order:
+
+1. the server's `Retry-After`
+2. the time until `x-ratelimit-reset`, when the rate limit is exhausted
+3. 60s, for a rate limit that gives neither, as
+   [GitHub asks](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)
+4. exponential backoff with jitter: 2-3s, 4-7s, 8-15s, then 16-30s for every
+   later attempt
+
+`max-retry-wait` caps the total wait for one request, so with the defaults the
+backoff fits in it (at most 55s over five attempts). Each attempt beyond five
+can add up to 30s, so raise `max-retry-wait` along with `max-attempts`.
+
+Every request has a 10s connect timeout and a 30s overall timeout. The JWT is
+signed once and signed again only when less than 2 minutes of its 10-minute
+lifetime remain, so no attempt sends an expired one.
 
 Anything else, such as 401, 404 or 422, fails at once. Each failed attempt logs
-its attempt number, the HTTP status or curl exit code, and the response body;
-neither the JWT nor the minted token is logged.
+its attempt number, the HTTP status or curl exit code, and the response body.
+The JWT and the minted token are never logged. After a transport error the body
+is not logged at all, because a token response cut off mid-transfer may still
+hold the token.
+
+> [!NOTE]
+> Creating a token is not idempotent. When the token request fails after GitHub
+> has minted a token, either with a 5xx or with a connection dropped mid-response
+> (logged as, for example, `curl exit 56 after HTTP 201`), the retry mints a
+> second one. The plugin never receives the first token, so it cannot revoke it.
+> That token keeps the scope the step requested and expires within an hour.
 
 ### Environment Variable Expansion
 

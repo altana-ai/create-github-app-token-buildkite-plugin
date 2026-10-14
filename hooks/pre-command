@@ -180,24 +180,51 @@ get_repo_info() {
   echo "$repo_owner $repo_name"
 }
 
+# curl exits worth retrying: DNS, connect, HTTP/2, partial transfer, timeout, TLS handshake, dropped connection
+TRANSIENT_CURL_EXITS=" 5 6 7 16 18 28 35 52 55 56 92 "
+
 # Function to read a response header, case-insensitively, from a `curl -D` dump
 header_value() {
   awk -v name="$2" 'tolower($1) == name ":" { value = $2 } END { print value }' "$1" | tr -d '\r'
 }
 
+# Function to sign a JWT unless the current one outlives a whole request with retries
+ensure_jwt() {
+  local now
+  now=$(date +%s)
+  [[ -n "${jwt_token:-}" && "$now" -lt "${jwt_refresh_at:-0}" ]] && return 0
+
+  jwt_token=$(generate_jwt "$app_id" "$private_key") || exit 1
+  # generate_jwt sets a 600s expiry; renewing 120s early keeps every attempt inside it
+  jwt_refresh_at=$(( now + 480 ))
+}
+
+# Function to name the rate limit a failed response hit, or print nothing
+rate_limit_kind() {
+  local http_code="$1" retry_after="$2" remaining="$3" body="$4"
+  [[ "$http_code" == 403 || "$http_code" == 429 ]] || return 0
+
+  if [[ "$body" == *[Ss]"econdary rate limit"* ]]; then
+    echo "secondary rate limit"
+  elif [[ "$http_code" == 429 || "$remaining" == 0 || -n "$retry_after" ]]; then
+    echo "rate limit"
+  fi
+}
+
 # Function to tell a transient API failure from a permanent one
 is_transient() {
-  local curl_exit="$1" http_code="$2" retry_after="$3" remaining="$4"
+  local curl_exit="$1" http_code="$2" rate_limit="$3"
 
-  [[ "$curl_exit" -ne 0 || "$http_code" == 429 || "$http_code" == 5?? ]] && return 0
-
-  # GitHub answers secondary rate limits with a 403
-  [[ "$http_code" == 403 && ( -n "$retry_after" || "$remaining" == 0 ) ]]
+  if [[ "$curl_exit" -ne 0 ]]; then
+    [[ "$TRANSIENT_CURL_EXITS" == *" $curl_exit "* ]]
+    return
+  fi
+  [[ -n "$rate_limit" || "$http_code" == 5?? ]]
 }
 
 # Function to pick the wait before the next attempt: the server's hint, else backoff with jitter
 retry_delay() {
-  local attempt="$1" retry_after="$2" remaining="$3" reset="$4"
+  local attempt="$1" retry_after="$2" remaining="$3" reset="$4" rate_limit="$5"
 
   if [[ "$retry_after" =~ ^[0-9]+$ ]]; then
     echo "$retry_after"
@@ -211,16 +238,22 @@ retry_delay() {
     return
   fi
 
-  # 2-3s, 4-7s, 8-15s, 16-31s, then 32-63s
-  local backoff=$(( 2 ** (attempt < 5 ? attempt : 5) ))
-  echo $(( backoff + RANDOM % backoff ))
+  # GitHub asks for at least a minute when a rate limit gives no hint
+  if [[ -n "$rate_limit" ]]; then
+    echo 60
+    return
+  fi
+
+  # 2-3s, 4-7s, 8-15s, then 16-30s for every later attempt
+  local backoff=$(( 2 ** (attempt < 4 ? attempt : 4) ))
+  local delay=$(( backoff + RANDOM % backoff ))
+  echo $(( delay < 30 ? delay : 30 ))
 }
 
 # Function to call the GitHub API, retrying transient failures
 #
-# Signs a fresh JWT for every attempt. Prints the response body followed by the
-# three-digit HTTP status, like `curl -w "%{http_code}"`, or 000 when no
-# response arrived.
+# Sets api_status to the three-digit HTTP status (000 when no complete response
+# arrived) and api_body to the response body.
 github_api_request() {
   local method="$1" url="$2" body="${3:-}"
   local -a body_args=()
@@ -233,38 +266,46 @@ github_api_request() {
   body_file="${tmp_dir}/body"
   header_file="${tmp_dir}/headers"
 
-  local attempt=1 waited=0 jwt curl_exit http_code response failure delay
+  local attempt=1 waited=0 curl_exit failure delay rate_limit
   local retry_after remaining reset
   while true; do
-    jwt=$(generate_jwt "$app_id" "$private_key") || { rm -rf "$tmp_dir"; exit 1; }
+    ensure_jwt
     : > "$body_file"
     : > "$header_file"
 
     curl_exit=0
-    http_code=$(curl -s -X "$method" -o "$body_file" -D "$header_file" -w "%{http_code}" \
+    api_status=$(curl -s -X "$method" -o "$body_file" -D "$header_file" -w "%{http_code}" \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-      -H "Authorization: Bearer $jwt" \
+      -H "Authorization: Bearer $jwt_token" \
       -H "Accept: application/vnd.github.v3+json" \
       ${body_args[@]+"${body_args[@]}"} \
       "$url") || curl_exit=$?
-    response=$(cat "$body_file")
+    api_body=$(cat "$body_file")
 
-    if [[ "$curl_exit" -eq 0 && "$http_code" == 2?? ]]; then
+    if [[ "$curl_exit" -eq 0 && "$api_status" == 2?? ]]; then
       break
     fi
-
-    failure="HTTP $http_code"
-    if [[ "$curl_exit" -ne 0 ]]; then
-      http_code="000"
-      failure="curl exit $curl_exit"
-    fi
-    echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($failure). Response: ${response:-<empty>}" >&2
 
     retry_after=$(header_value "$header_file" "retry-after")
     remaining=$(header_value "$header_file" "x-ratelimit-remaining")
     reset=$(header_value "$header_file" "x-ratelimit-reset")
+    rate_limit=""
 
-    if ! is_transient "$curl_exit" "$http_code" "$retry_after" "$remaining"; then
+    if [[ "$curl_exit" -ne 0 ]]; then
+      failure="curl exit $curl_exit"
+      [[ "$api_status" == 2?? ]] && failure+=" after HTTP $api_status"
+      # A body cut off mid-transfer may hold a minted token, so it is never logged
+      api_status="000"
+      api_body=""
+      echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($failure). Response: not logged after a transport error" >&2
+    else
+      failure="HTTP $api_status"
+      rate_limit=$(rate_limit_kind "$api_status" "$retry_after" "$remaining" "$api_body")
+      [[ -n "$rate_limit" ]] && failure+=", $rate_limit"
+      echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($failure). Response: ${api_body:-<empty>}" >&2
+    fi
+
+    if ! is_transient "$curl_exit" "$api_status" "$rate_limit"; then
       break
     fi
 
@@ -273,7 +314,7 @@ github_api_request() {
       break
     fi
 
-    delay=$(retry_delay "$attempt" "$retry_after" "$remaining" "$reset")
+    delay=$(retry_delay "$attempt" "$retry_after" "$remaining" "$reset" "$rate_limit")
     if (( waited + delay > max_retry_wait )); then
       echo "❌ Error: $method $url still failing ($failure); waiting ${delay}s more would exceed max-retry-wait (${max_retry_wait}s)" >&2
       break
@@ -286,7 +327,6 @@ github_api_request() {
   done
 
   rm -rf "$tmp_dir"
-  printf '%s%s' "$response" "$http_code"
 }
 
 # Function to get installation ID
@@ -295,12 +335,8 @@ get_installation_id() {
   local repo_name="$2"
 
   # Get installation ID for the repository
-  local response http_code
-  response=$(github_api_request GET "${github_api_url}/repos/${repo_owner}/${repo_name}/installation") || exit 1
-
-  # Extract HTTP status code and response body
-  http_code="${response: -3}"
-  response="${response%???}"
+  github_api_request GET "${github_api_url}/repos/${repo_owner}/${repo_name}/installation"
+  local response="$api_body" http_code="$api_status"
 
   # Check for 404 - App not installed
   if [[ "$http_code" == "404" ]]; then
@@ -443,10 +479,8 @@ generate_installation_token() {
   echo "📁 Target repositories: $repositories_summary" >&2
 
   # Generate installation access token
-  local response http_code
-  response=$(github_api_request POST "${github_api_url}/app/installations/${installation_id}/access_tokens" "$request_body") || exit 1
-  http_code="${response: -3}"
-  response="${response%???}"
+  github_api_request POST "${github_api_url}/app/installations/${installation_id}/access_tokens" "$request_body"
+  local response="$api_body" http_code="$api_status"
 
   if [[ "$http_code" != "201" ]]; then
     echo "❌ Error: Failed to generate installation token (HTTP $http_code). Response: $response" >&2
@@ -466,9 +500,9 @@ generate_installation_token() {
 }
 
 # Main execution
-# Fail on a bad private key before any request; each request signs its own JWT
-echo "🔑 Validating private key..."
-generate_jwt "$app_id" "$private_key" > /dev/null
+# Signing up front makes a bad private key fail before any request
+echo "🔑 Generating JWT token..."
+ensure_jwt
 
 echo "🔍 Getting repository information..."
 repo_info=$(get_repo_info)
