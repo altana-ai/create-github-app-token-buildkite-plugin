@@ -7,13 +7,13 @@ PLUGIN_PREFIX="CREATE_GITHUB_APP_TOKEN"
 
 # Plugin configuration reader function
 function plugin_read_config() {
-  local var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
-  local default="${2:-}"
-  local value="${!var:-$default}"
+  local +x var="BUILDKITE_PLUGIN_${PLUGIN_PREFIX}_${1}"
+  local +x default="${2:-}"
+  local +x value="${!var:-$default}"
 
   # Handle environment variable expansion for values starting with $
   if [[ "$value" =~ ^\$([A-Za-z_][A-Za-z0-9_]*) ]]; then
-    local env_var="${BASH_REMATCH[1]}"
+    local +x env_var="${BASH_REMATCH[1]}"
     echo "${!env_var}"
   else
     echo "$value"
@@ -25,19 +25,19 @@ skip_token_revoke=$(plugin_read_config "SKIP_TOKEN_REVOKE" "false")
 
 # Function to revoke token
 revoke_token() {
-  local token="$1"
-  local api_url="$2"
+  local +x token="$1"
+  local +x api_url="$2"
 
   echo "🔐 Revoking GitHub App token..."
 
   # Make DELETE request to revoke the token
-  local response
-  response=$(curl -s -w "%{http_code}" -X DELETE \
+  local +x response
+  response=$(curl -s -w "%{http_code}" -X DELETE --connect-timeout 10 --max-time 30 \
     -H "Authorization: token $token" \
     -H "Accept: application/vnd.github.v3+json" \
     "${api_url}/installation/token" 2>/dev/null || echo "000")
 
-  local http_code="${response: -3}"
+  local +x http_code="${response: -3}"
 
   if [[ "$http_code" == "204" ]]; then
     echo "✅ Token revoked successfully"
