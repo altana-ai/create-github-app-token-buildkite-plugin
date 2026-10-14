@@ -32,7 +32,7 @@ revoke_token() {
 
   # Make DELETE request to revoke the token
   local response
-  response=$(curl -s -w "%{http_code}" -X DELETE \
+  response=$(curl -s -w "%{http_code}" -X DELETE --connect-timeout 10 --max-time 30 \
     -H "Authorization: token $token" \
     -H "Accept: application/vnd.github.v3+json" \
     "${api_url}/installation/token" 2>/dev/null || echo "000")

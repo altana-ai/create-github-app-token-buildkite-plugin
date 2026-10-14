@@ -194,20 +194,20 @@ loggable_body() {
     echo "<empty>"
     return
   fi
-  sed -E 's/"token"[[:space:]]*:[[:space:]]*"[^"]*"/"token":"[REDACTED]"/g; s/gh[opsu]_[A-Za-z0-9_]+/[REDACTED]/g' <<< "$1"
+  sed -E 's/"token"[[:space:]]*:[[:space:]]*"[^"]*"/"token":"[REDACTED]"/g; s/(gh[opsur]|github_pat)_[A-Za-z0-9_]+/[REDACTED]/g' <<< "$1"
 }
 
 # Function to sign a JWT unless the current one outlives a whole request with retries
 ensure_jwt() {
   local now
   now=$(date +%s)
-  if [[ -n "${jwt_token:-}" && "$now" -lt "${jwt_refresh_at:-0}" ]]; then
+  if [[ -n "${_cgat_jwt:-}" && "$now" -lt "${_cgat_jwt_refresh_at:-0}" ]]; then
     return 0
   fi
 
-  jwt_token=$(generate_jwt "$app_id" "$private_key") || exit 1
+  _cgat_jwt=$(generate_jwt "$app_id" "$private_key") || exit 1
   # generate_jwt sets a 600s expiry; renewing 120s early keeps every attempt inside it
-  jwt_refresh_at=$(( now + 480 ))
+  _cgat_jwt_refresh_at=$(( now + 480 ))
 }
 
 # Function to name the rate limit a failed response hit, or print nothing
@@ -215,7 +215,7 @@ rate_limit_kind() {
   local http_code="$1" retry_after="$2" remaining="$3" body="$4"
   [[ "$http_code" == 403 || "$http_code" == 429 ]] || return 0
 
-  if [[ "$body" == *[Ss]"econdary rate limit"* ]]; then
+  if [[ "$body" == *[Ss]"econdary rate limit"* || "$body" == *"abuse detection"* ]]; then
     echo "secondary rate limit"
   elif [[ "$http_code" == 429 || "$remaining" == 0 || -n "$retry_after" ]]; then
     echo "rate limit"
@@ -233,36 +233,36 @@ is_transient() {
   [[ -n "$rate_limit" || "$http_code" == 5?? ]]
 }
 
-# Function to pick the wait before the next attempt: the server's hint, else backoff with jitter
+# Function to pick the wait before the next attempt, as "<base> <jitter>" seconds
 retry_delay() {
   local attempt="$1" retry_after="$2" remaining="$3" reset="$4" rate_limit="$5"
-  local delay
+  local base
 
   if [[ "$retry_after" =~ ^[0-9]+$ ]]; then
-    delay="$retry_after"
-  elif [[ "$remaining" == 0 && "$reset" =~ ^[0-9]+$ ]]; then
-    delay=$(( reset - $(date +%s) ))
-    (( delay > 0 )) || delay=1
+    base="$retry_after"
+  elif [[ -n "$rate_limit" && "$remaining" == 0 && "$reset" =~ ^[0-9]+$ ]]; then
+    base=$(( reset - $(date +%s) ))
+    (( base > 0 )) || base=1
   elif [[ -n "$rate_limit" ]]; then
     # GitHub asks for at least a minute when a rate limit gives no hint
-    delay=60
+    base=60
   else
     # 2-3s, 4-7s, 8-15s, then 16-30s for every later attempt
-    local backoff=$(( 2 ** (attempt < 4 ? attempt : 4) ))
-    delay=$(( backoff + RANDOM % backoff ))
-    echo $(( delay < 30 ? delay : 30 ))
+    base=$(( 2 ** (attempt < 4 ? attempt : 4) ))
+    local jitter=$(( RANDOM % base ))
+    echo "$base $(( base + jitter < 30 ? jitter : 30 - base ))"
     return
   fi
 
   # Up to 25% more, so parallel jobs told the same wait do not retry in lockstep
-  echo $(( delay + RANDOM % (delay / 4 + 1) ))
+  echo "$base $(( RANDOM % (base / 4 + 1) ))"
 }
 
 # Function to call the GitHub API, retrying transient failures
 #
-# Sets api_status to the three-digit HTTP status (000 when no complete response
-# arrived), api_body to the response body (empty after a transport error), and
-# api_failure to what went wrong on the last attempt.
+# Sets _cgat_status to the three-digit HTTP status (000 when no complete response
+# arrived), _cgat_body to the response body (empty after a transport error), and
+# _cgat_failure to what went wrong on the last attempt.
 github_api_request() {
   local method="$1" url="$2" body="${3:-}"
   local -a body_args=()
@@ -270,7 +270,7 @@ github_api_request() {
     body_args=(-H "Content-Type: application/json" -d "$body")
   fi
 
-  local attempt=1 waited=0 header_file output curl_exit delay rate_limit shown_body
+  local attempt=1 waited=0 header_file output curl_exit delay jitter rate_limit shown_body
   local retry_after remaining reset
   while true; do
     ensure_jwt
@@ -280,61 +280,63 @@ github_api_request() {
     curl_exit=0
     output=$(curl -sS -X "$method" -D "$header_file" -w "%{http_code}" \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
-      -H "Authorization: Bearer $jwt_token" \
+      -H "Authorization: Bearer $_cgat_jwt" \
       -H "Accept: application/vnd.github.v3+json" \
       ${body_args[@]+"${body_args[@]}"} \
       "$url") || curl_exit=$?
-    api_status="${output: -3}"
-    api_body="${output%???}"
+    _cgat_status="${output: -3}"
+    _cgat_body="${output%???}"
     retry_after=$(header_value "$header_file" "retry-after")
     remaining=$(header_value "$header_file" "x-ratelimit-remaining")
     reset=$(header_value "$header_file" "x-ratelimit-reset")
     rm -f "$header_file"
 
-    if [[ ! "$api_status" =~ ^[0-9]{3}$ ]]; then
-      api_status="000"
+    if [[ ! "$_cgat_status" =~ ^[0-9]{3}$ ]]; then
+      _cgat_status="000"
     fi
 
-    if [[ "$curl_exit" -eq 0 && "$api_status" == 2?? ]]; then
-      api_failure=""
+    if [[ "$curl_exit" -eq 0 && "$_cgat_status" == 2?? ]]; then
+      _cgat_failure=""
       break
     fi
 
     rate_limit=""
     if [[ "$curl_exit" -ne 0 ]]; then
-      api_failure="curl exit $curl_exit"
-      if [[ "$api_status" != 000 ]]; then
-        api_failure+=" after HTTP $api_status"
+      _cgat_failure="curl exit $curl_exit"
+      if [[ "$_cgat_status" != 000 ]]; then
+        _cgat_failure+=" after HTTP $_cgat_status"
       fi
       # A body cut off mid-transfer may hold a minted token, so it is dropped unread
-      api_status="000"
-      api_body=""
+      _cgat_status="000"
+      _cgat_body=""
       shown_body="not logged after a transport error"
     else
-      api_failure="HTTP $api_status"
-      rate_limit=$(rate_limit_kind "$api_status" "$retry_after" "$remaining" "$api_body")
+      _cgat_failure="HTTP $_cgat_status"
+      rate_limit=$(rate_limit_kind "$_cgat_status" "$retry_after" "$remaining" "$_cgat_body")
       if [[ -n "$rate_limit" ]]; then
-        api_failure+=", $rate_limit"
+        _cgat_failure+=", $rate_limit"
       fi
-      shown_body=$(loggable_body "$api_body")
+      shown_body=$(loggable_body "$_cgat_body")
     fi
 
-    if ! is_transient "$curl_exit" "$api_status" "$rate_limit"; then
+    if ! is_transient "$curl_exit" "$_cgat_status" "$rate_limit"; then
       break
     fi
 
     if [[ "$attempt" -ge "$max_attempts" ]]; then
-      echo "❌ Error: $method $url still failing after $attempt attempts ($api_failure)" >&2
+      echo "❌ Error: $method $url still failing after $attempt attempts ($_cgat_failure)" >&2
       break
     fi
 
-    delay=$(retry_delay "$attempt" "$retry_after" "$remaining" "$reset" "$rate_limit")
+    read -r delay jitter <<< "$(retry_delay "$attempt" "$retry_after" "$remaining" "$reset" "$rate_limit")"
     if (( waited + delay > max_retry_wait )); then
-      echo "❌ Error: $method $url still failing ($api_failure); waiting ${delay}s more would exceed max-retry-wait (${max_retry_wait}s)" >&2
+      echo "❌ Error: $method $url still failing ($_cgat_failure); waiting ${delay}s more would exceed max-retry-wait (${max_retry_wait}s)" >&2
       break
     fi
+    # Jitter never takes the total past the budget
+    delay=$(( waited + delay + jitter > max_retry_wait ? max_retry_wait - waited : delay + jitter ))
 
-    echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($api_failure). Response: $shown_body" >&2
+    echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($_cgat_failure). Response: $shown_body" >&2
     echo "⏳ Retrying in ${delay}s..." >&2
     sleep "$delay"
     waited=$(( waited + delay ))
@@ -344,14 +346,14 @@ github_api_request() {
 
 # Function to fail the step on an API call that did not succeed, logging its body once
 fail_api_call() {
-  echo "❌ Error: $1 ($api_failure)" >&2
-  if [[ "$api_status" != 000 ]]; then
-    echo "Response: $(loggable_body "$api_body")" >&2
+  echo "❌ Error: $1 ($_cgat_failure)" >&2
+  if [[ "$_cgat_status" != 000 ]]; then
+    echo "Response: $(loggable_body "$_cgat_body")" >&2
   fi
   exit 1
 }
 
-# Function to look up the installation ID, into installation_id
+# Function to look up the installation ID, into _cgat_installation_id
 get_installation_id() {
   local repo_owner="$1"
   local repo_name="$2"
@@ -360,7 +362,7 @@ get_installation_id() {
   github_api_request GET "${github_api_url}/repos/${repo_owner}/${repo_name}/installation"
 
   # Check for 404 - App not installed
-  if [[ "$api_status" == "404" ]]; then
+  if [[ "$_cgat_status" == "404" ]]; then
     echo "❌ Error: GitHub App is not installed on ${repo_owner}/${repo_name}" >&2
     echo "Please install the GitHub App on this repository or organization:" >&2
     echo "1. Go to your GitHub App settings" >&2
@@ -371,16 +373,16 @@ get_installation_id() {
   fi
 
   # Check for other HTTP errors
-  if [[ "$api_status" != 2?? ]]; then
+  if [[ "$_cgat_status" != 2?? ]]; then
     fail_api_call "Failed to get installation information"
   fi
 
   # Extract installation ID from response using jq; a body that is not JSON has none
-  installation_id=$(jq -r '.id // empty' <<< "$api_body" 2>/dev/null) || installation_id=""
+  _cgat_installation_id=$(jq -r '.id // empty' <<< "$_cgat_body" 2>/dev/null) || _cgat_installation_id=""
 
-  if [[ -z "$installation_id" ]]; then
+  if [[ -z "$_cgat_installation_id" ]]; then
     echo "❌ Error: Failed to extract installation ID from response" >&2
-    echo "Response: $(loggable_body "$api_body")" >&2
+    echo "Response: $(loggable_body "$_cgat_body")" >&2
     exit 1
   fi
 }
@@ -461,7 +463,7 @@ build_repositories_json() {
   jq -nc '$ARGS.positional' --args "${repos[@]}"
 }
 
-# Function to generate installation access token, into access_token
+# Function to generate installation access token, into _cgat_access_token
 generate_installation_token() {
   local installation_id="$1"
 
@@ -497,24 +499,28 @@ generate_installation_token() {
   # Generate installation access token
   github_api_request POST "${github_api_url}/app/installations/${installation_id}/access_tokens" "$request_body"
 
-  if [[ "$api_status" != 2?? ]]; then
+  if [[ "$_cgat_status" != 2?? ]]; then
     fail_api_call "Failed to generate installation token"
   fi
 
   # Extract token from response using jq; a body that is not JSON has none
-  access_token=$(jq -r '.token // empty' <<< "$api_body" 2>/dev/null) || access_token=""
+  _cgat_access_token=$(jq -r '.token // empty' <<< "$_cgat_body" 2>/dev/null) || _cgat_access_token=""
 
-  if [[ -z "$access_token" ]]; then
-    api_failure="HTTP $api_status without a token"
+  if [[ -z "$_cgat_access_token" ]]; then
+    _cgat_failure="HTTP $_cgat_status without a token"
     fail_api_call "Failed to generate installation token"
   fi
 
   # Register the token with the redactor before anything else can log it
-  echo "$access_token" | buildkite-agent redactor add
-  unset api_body
+  echo "$_cgat_access_token" | buildkite-agent redactor add
+  unset _cgat_body
 }
 
 # Main execution
+# Hook state is namespaced and cleared first, so a same-named exported variable cannot carry it into the job
+_cgat_state=(_cgat_jwt _cgat_jwt_refresh_at _cgat_status _cgat_body _cgat_failure _cgat_installation_id _cgat_access_token)
+unset "${_cgat_state[@]}"
+
 # Signing up front makes a bad private key fail before any request
 echo "🔑 Generating JWT token..."
 ensure_jwt
@@ -528,20 +534,22 @@ echo "🔍 Getting installation ID..."
 get_installation_id "$repo_owner" "$repo_name"
 
 # Export installation ID as environment variable
-export GITHUB_APP_INSTALLATION_ID="$installation_id"
-echo "✅ GitHub App installation ID exported as GITHUB_APP_INSTALLATION_ID: $installation_id"
+export GITHUB_APP_INSTALLATION_ID="$_cgat_installation_id"
+echo "✅ GitHub App installation ID exported as GITHUB_APP_INSTALLATION_ID: $_cgat_installation_id"
 
 echo "🎫 Generating installation access token..."
-generate_installation_token "$installation_id"
+generate_installation_token "$_cgat_installation_id"
 
 # Export token as environment variable
-export "$output_variable"="$access_token"
+export "$output_variable"="$_cgat_access_token"
 echo "✅ GitHub App token generated and exported as $output_variable"
 
 # Store token information for post-command cleanup if revocation is enabled.
 # These must be exported: buildkite-agent propagates only exported variables
 # between hooks, so a plain assignment leaves post-command with nothing to revoke.
 if [[ "$skip_token_revoke" == "false" ]]; then
-  export GITHUB_APP_TOKEN_FOR_REVOCATION="$access_token"
+  export GITHUB_APP_TOKEN_FOR_REVOCATION="$_cgat_access_token"
   export GITHUB_API_URL_FOR_REVOCATION="$github_api_url"
 fi
+
+unset "${_cgat_state[@]}" _cgat_state

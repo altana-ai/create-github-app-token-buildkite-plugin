@@ -81,13 +81,34 @@ teardown() {
 
 @test "masks token-shaped strings in a logged body" {
   export STUB_ACCESS_TOKEN_HTTP_CODE="422"
-  export STUB_ERROR_MESSAGE="rejected ghs_leakedtoken"
+  export STUB_ERROR_MESSAGE="rejected ghs_leakedtoken ghr_refresh github_pat_finegrained"
 
   run bash "$PRE_COMMAND"
 
   [ "$status" -eq 1 ]
   refute_output_contains "ghs_leakedtoken"
-  assert_output_contains "rejected [REDACTED]"
+  refute_output_contains "ghr_refresh"
+  refute_output_contains "github_pat_finegrained"
+  assert_output_contains "rejected [REDACTED] [REDACTED] [REDACTED]"
+}
+
+@test "keeps the JWT and the token out of same-named exported variables" {
+  export jwt_token="preset" access_token="preset" api_body="preset"
+  export _cgat_jwt="preset" _cgat_access_token="preset" _cgat_body="preset"
+
+  run bash -c 'source "$PRE_COMMAND" >/dev/null 2>&1; export -p'
+
+  [ "$status" -eq 0 ]
+  [ -n "$(sent_jwts)" ]
+  local jwt
+  while IFS= read -r jwt; do
+    refute_output_contains "$jwt"
+  done < <(sent_jwts)
+  # The token is exported only where the plugin hands it to the job and post-command
+  # (the stub's own STUB_ACCESS_TOKEN aside).
+  [ "$(grep -F "$STUB_ACCESS_TOKEN" <<< "$output" | grep -vc '^declare -x STUB_ACCESS_TOKEN=')" -eq 2 ]
+  assert_output_contains "GITHUB_TOKEN=\"$STUB_ACCESS_TOKEN\""
+  assert_output_contains "GITHUB_APP_TOKEN_FOR_REVOCATION=\"$STUB_ACCESS_TOKEN\""
 }
 
 @test "backs off exponentially with jitter, capped at 30s a step" {
@@ -128,6 +149,28 @@ teardown() {
   [ "$(sleeps)" -le 10 ]
 }
 
+@test "a Retry-After that fits the budget is never pushed past it by jitter" {
+  export STUB_ACCESS_TOKEN_HTTP_CODE="429 201"
+  export STUB_RETRY_AFTER="120"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(sleeps)" -eq 120 ]
+}
+
+@test "ignores x-ratelimit-reset on a 5xx" {
+  export STUB_NOW="1700000000"
+  export STUB_INSTALLATION_HTTP_CODE="502 200"
+  export STUB_RATELIMIT_RESET="1700003600"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(sleeps)" -ge 2 ]
+  [ "$(sleeps)" -le 3 ]
+}
+
 @test "honours x-ratelimit-reset on a rate-limited 403" {
   export STUB_NOW="1700000000"
   export STUB_INSTALLATION_HTTP_CODE="403 200"
@@ -149,6 +192,18 @@ teardown() {
 
   [ "$status" -eq 0 ]
   [ "$(calls_to /installation)" -eq 2 ]
+  [ "$(sleeps)" -ge 60 ]
+  [ "$(sleeps)" -le 75 ]
+  assert_output_contains "(HTTP 403, secondary rate limit)"
+}
+
+@test "treats an abuse detection 403 as a secondary rate limit" {
+  export STUB_INSTALLATION_HTTP_CODE="403 200"
+  export STUB_ERROR_MESSAGE="You have triggered an abuse detection mechanism."
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
   [ "$(sleeps)" -ge 60 ]
   [ "$(sleeps)" -le 75 ]
   assert_output_contains "(HTTP 403, secondary rate limit)"

@@ -386,18 +386,22 @@ The installation lookup and the token request each retry transient failures:
 - HTTP 429 and 5xx
 - HTTP 403 when it is a rate limit: a `Retry-After` header,
   `x-ratelimit-remaining: 0`, or a body that names a secondary rate limit
+  (or, in older GitHub and GHES wording, an abuse detection mechanism)
 
 The wait before the next attempt is chosen in this order:
 
 1. the server's `Retry-After`
-2. the time until `x-ratelimit-reset`, when the rate limit is exhausted
+2. the time until `x-ratelimit-reset`, when a rate-limit response says the
+   limit is exhausted (a 5xx carrying these headers gets ordinary backoff)
 3. 60s, for a rate limit that gives neither, as
    [GitHub asks](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately)
 4. exponential backoff with jitter: 2-3s, 4-7s, 8-15s, then 16-30s for every
    later attempt
 
 The first three get up to 25% extra jitter, so parallel jobs told to wait the
-same time do not all retry at once.
+same time do not all retry at once. The budget below is checked against the
+wait before jitter, and jitter never takes the total past it, so a hint that
+fits the budget is always honoured.
 
 `max-retry-wait` caps the total wait for one request. The default of 120s fits
 the whole backoff (at most 55s over five attempts), and also fits one
@@ -405,15 +409,17 @@ secondary-rate-limit wait (at most 75s) after the backoff that comes before it,
 so with the defaults a request waits at most two minutes. Each attempt beyond
 five can add up to 30s, so raise `max-retry-wait` along with `max-attempts`.
 
-Every request has a 10s connect timeout and a 30s overall timeout. The JWT is
-signed once and signed again only when less than 2 minutes of its 10-minute
-lifetime remain, so no attempt sends an expired one.
+Every request, including the revocation in `post-command`, has a 10s connect
+timeout and a 30s overall timeout. The JWT is signed once and signed again only
+when less than 2 minutes of its 10-minute lifetime remain, so no attempt sends
+an expired one.
 
 Anything else, such as 401, 404 or 422, fails at once. Each retried attempt
 logs its attempt number, the HTTP status or curl exit code (with any status
 received before the connection failed), and the response body. The final
 failure is logged once, with its body. Anything token-shaped in a logged body
-is masked, and the JWT and the minted token are never logged. After a transport
+(`"token": "..."`, `gho_`, `ghp_`, `ghr_`, `ghs_`, `ghu_` and `github_pat_`
+values) is masked, and the JWT and the minted token are never logged. After a transport
 error the body is not logged at all, because a token response cut off
 mid-transfer may still hold the token. A token from any 2xx response is
 accepted and added to the redactor before anything else is logged.

@@ -2,9 +2,8 @@
 # Stub for curl. Records the invocation in $CURL_LOG and answers the three
 # GitHub API endpoints the hooks call.
 #
-# pre-command writes the body to `-o` and the headers to `-D`, and prints the
-# status with `-w "%{http_code}"`. post-command's DELETE passes no `-o`, so its
-# body and status both go to stdout, the way real curl does.
+# Both hooks read the body and then the `-w "%{http_code}"` status from stdout,
+# the way real curl prints them; pre-command also passes `-D` for the headers.
 #
 # STUB_INSTALLATION_HTTP_CODE and STUB_ACCESS_TOKEN_HTTP_CODE are space-separated
 # lists: the nth request to an endpoint gets the nth entry, and the last entry
@@ -18,13 +17,12 @@ printf '%s\n' "$*" >> "$CURL_LOG"
 # curl is always invoked with the URL as the final argument.
 url="${!#}"
 
-body_file=/dev/stdout
 header_file=/dev/null
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -o) body_file="$2"; shift ;;
-    -D) header_file="$2"; shift ;;
-  esac
+  if [[ "$1" == -D ]]; then
+    header_file="$2"
+    shift
+  fi
   shift
 done
 
@@ -46,7 +44,7 @@ respond() {
     IFS=: read -r _ curl_exit status <<< "$http_code"
     if [[ -n "$status" ]]; then
       printf 'HTTP/2 %s\r\n\r\n' "$status" > "$header_file"
-      printf '%s' "${body:0:20}" > "$body_file"
+      printf '%s' "${body:0:20}"
     fi
     printf '%s' "${status:-000}"
     exit "$curl_exit"
@@ -62,7 +60,7 @@ respond() {
     fi
     printf '\r\n'
   } > "$header_file"
-  printf '%s' "$body" > "$body_file"
+  printf '%s' "$body"
   printf '%s' "$http_code"
 }
 
