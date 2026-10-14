@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Spy for rm. With ENV_SPY_LOG set, records the environment each call inherits,
+# which is how the leak tests see what the hook's child processes get; then it
+# runs the real rm.
+set -uo pipefail
+
+if [[ -n "${ENV_SPY_LOG:-}" ]]; then
+  env >> "$ENV_SPY_LOG"
+fi
+
+PATH="${PATH//"$(dirname "$0"):"/}" exec rm "$@"

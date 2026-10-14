@@ -46,6 +46,17 @@ teardown() {
   assert_output_contains "(curl exit 18 after HTTP 503)"
 }
 
+@test "treats a transport error after a 404 as the 404" {
+  export STUB_INSTALLATION_HTTP_CODE="exit:28:404"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 1 ]
+  [ "$(calls_to /installation)" -eq 1 ]
+  [ -z "$(sleeps)" ]
+  assert_output_contains "GitHub App is not installed on test-owner/test-repo"
+}
+
 @test "does not retry curl errors that are not transport failures" {
   export STUB_INSTALLATION_HTTP_CODE="exit:60"
 
@@ -90,6 +101,28 @@ teardown() {
   refute_output_contains "ghr_refresh"
   refute_output_contains "github_pat_finegrained"
   assert_output_contains "rejected [REDACTED] [REDACTED] [REDACTED]"
+}
+
+@test "keeps secrets out of the environment of child processes" {
+  export output="preset" body="preset" url="preset" header_file="preset" headers="preset"
+  export ENV_SPY_LOG="${TEST_TMPDIR}/env.log"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ -s "$ENV_SPY_LOG" ]
+  local -a jwts=()
+  local jwt
+  while IFS= read -r jwt; do
+    jwts+=("$jwt")
+  done < <(sent_jwts)
+  [ "${#jwts[@]}" -gt 0 ]
+  # Every environment rm inherited, the stub's own STUB_ACCESS_TOKEN aside.
+  run grep -v '^STUB_ACCESS_TOKEN=' "$ENV_SPY_LOG"
+  refute_output_contains "ghs_"
+  for jwt in "${jwts[@]}"; do
+    refute_output_contains "$jwt"
+  done
 }
 
 @test "keeps the JWT and the token out of same-named exported variables" {
@@ -159,6 +192,29 @@ teardown() {
   [ "$(sleeps)" -eq 120 ]
 }
 
+@test "never waits less than the backoff step for a zero Retry-After" {
+  export STUB_ACCESS_TOKEN_HTTP_CODE="429 201"
+  export STUB_RETRY_AFTER="0"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(sleeps)" -ge 2 ]
+  [ "$(sleeps)" -le 3 ]
+}
+
+@test "never waits less than the backoff step for a reset in the past" {
+  export STUB_NOW="1700000000"
+  export STUB_INSTALLATION_HTTP_CODE="403 200"
+  export STUB_RATELIMIT_RESET="1699999000"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  [ "$(sleeps)" -ge 2 ]
+  [ "$(sleeps)" -le 3 ]
+}
+
 @test "ignores x-ratelimit-reset on a 5xx" {
   export STUB_NOW="1700000000"
   export STUB_INSTALLATION_HTTP_CODE="502 200"
@@ -197,6 +253,26 @@ teardown() {
   assert_output_contains "(HTTP 403, secondary rate limit)"
 }
 
+@test "doubles the wait for consecutive secondary rate limits" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_MAX_RETRY_WAIT="1000"
+  export STUB_INSTALLATION_HTTP_CODE="403 403 200"
+  export STUB_ERROR_MESSAGE="You have exceeded a secondary rate limit."
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  local -a delays=()
+  local delay
+  while IFS= read -r delay; do
+    delays+=("$delay")
+  done < "$SLEEP_LOG"
+  [ "${#delays[@]}" -eq 2 ]
+  [ "${delays[0]}" -ge 60 ]
+  [ "${delays[0]}" -le 75 ]
+  [ "${delays[1]}" -ge 120 ]
+  [ "${delays[1]}" -le 150 ]
+}
+
 @test "treats an abuse detection 403 as a secondary rate limit" {
   export STUB_INSTALLATION_HTTP_CODE="403 200"
   export STUB_ERROR_MESSAGE="You have triggered an abuse detection mechanism."
@@ -229,8 +305,7 @@ teardown() {
   [ "$status" -eq 1 ]
   [ "$(calls_to /installation)" -eq 1 ]
   [ -z "$(sleeps)" ]
-  assert_output_contains "still failing (HTTP 403, secondary rate limit); waiting "
-  assert_output_contains "s more would exceed max-retry-wait (30s)"
+  assert_output_contains "still failing (HTTP 403, secondary rate limit); its next wait would exceed max-retry-wait (30s)"
 }
 
 @test "does not retry a 401, and logs its body once" {
@@ -371,6 +446,19 @@ teardown() {
   refute_output_contains "Bearer"
   refute_output_contains "eyJ"
   refute_output_contains "ghs_"
+}
+
+@test "rejects a max-retry-wait with leading zeros" {
+  local value
+  for value in 090 010; do
+    export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_MAX_RETRY_WAIT="$value"
+
+    run bash "$PRE_COMMAND"
+
+    [ "$status" -eq 1 ]
+    assert_output_contains "max-retry-wait must be a non-negative integer, got '$value'"
+  done
+  [ "$(calls_to /installation)" -eq 0 ]
 }
 
 @test "rejects a max-attempts that is not a positive integer" {

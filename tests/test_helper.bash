@@ -4,7 +4,8 @@
 # The hooks talk to the GitHub API with curl and to the agent with
 # buildkite-agent; both are replaced by stubs on PATH so the tests are hermetic.
 # sleep is stubbed too, so retry backoff is recorded rather than waited out, and
-# date can run on a simulated clock that those recorded delays advance.
+# date can run on a simulated clock that those recorded delays advance. rm is a
+# spy that can record the environment the hook's child processes inherit.
 # openssl is *not* stubbed — a throwaway RSA key is generated once per file so
 # the JWT signing path runs for real.
 
@@ -39,6 +40,12 @@ setup_test_env() {
 
   PATH="${BATS_TEST_DIRNAME}/stubs:${PATH}"
   export PATH CURL_LOG REDACTOR_LOG SLEEP_LOG CLOCK_LOG
+
+  # Stub controls from the developer's shell would change what every stub answers.
+  local control
+  while IFS= read -r control; do
+    unset "$control"
+  done < <(compgen -e | grep -E '^(STUB_|ENV_SPY_LOG$)' || true)
 
   export STUB_ACCESS_TOKEN="ghs_stubaccesstoken"
   export STUB_INSTALLATION_ID="87654321"
