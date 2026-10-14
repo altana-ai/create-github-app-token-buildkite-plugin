@@ -97,7 +97,7 @@ The most seconds one request may spend waiting between attempts. A retry that
 would take the total past this limit, such as a long `Retry-After`, fails the
 step instead.
 
-Default: `60`
+Default: `120`
 
 ### Permission parameters
 
@@ -396,19 +396,27 @@ The wait before the next attempt is chosen in this order:
 4. exponential backoff with jitter: 2-3s, 4-7s, 8-15s, then 16-30s for every
    later attempt
 
-`max-retry-wait` caps the total wait for one request, so with the defaults the
-backoff fits in it (at most 55s over five attempts). Each attempt beyond five
-can add up to 30s, so raise `max-retry-wait` along with `max-attempts`.
+The first three get up to 25% extra jitter, so parallel jobs told to wait the
+same time do not all retry at once.
+
+`max-retry-wait` caps the total wait for one request. The default of 120s fits
+the whole backoff (at most 55s over five attempts), and also fits one
+secondary-rate-limit wait (at most 75s) after the backoff that comes before it,
+so with the defaults a request waits at most two minutes. Each attempt beyond
+five can add up to 30s, so raise `max-retry-wait` along with `max-attempts`.
 
 Every request has a 10s connect timeout and a 30s overall timeout. The JWT is
 signed once and signed again only when less than 2 minutes of its 10-minute
 lifetime remain, so no attempt sends an expired one.
 
-Anything else, such as 401, 404 or 422, fails at once. Each failed attempt logs
-its attempt number, the HTTP status or curl exit code, and the response body.
-The JWT and the minted token are never logged. After a transport error the body
-is not logged at all, because a token response cut off mid-transfer may still
-hold the token.
+Anything else, such as 401, 404 or 422, fails at once. Each retried attempt
+logs its attempt number, the HTTP status or curl exit code (with any status
+received before the connection failed), and the response body. The final
+failure is logged once, with its body. Anything token-shaped in a logged body
+is masked, and the JWT and the minted token are never logged. After a transport
+error the body is not logged at all, because a token response cut off
+mid-transfer may still hold the token. A token from any 2xx response is
+accepted and added to the redactor before anything else is logged.
 
 > [!NOTE]
 > Creating a token is not idempotent. When the token request fails after GitHub
@@ -459,8 +467,9 @@ This error replaces the generic "Failed to get installation ID" message and prov
 
 ### Error: Failed to generate installation token
 
-The message names the HTTP status, or `HTTP 000` when no response arrived; the
-attempt log above it shows each failure. A transient failure that outlasted the
+The message names the HTTP status, or the curl exit code when the connection
+failed, with any status received before it (for example `curl exit 18 after
+HTTP 503`); the attempt log above it shows each retried failure. A transient failure that outlasted the
 retries reads `still failing after N attempts`. Otherwise this typically
 indicates:
 

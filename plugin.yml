@@ -38,8 +38,8 @@ configuration:
       default: 5
     max-retry-wait:
       type: integer
-      description: Most seconds to spend waiting between attempts of one request (defaults to 60)
-      default: 60
+      description: Most seconds to spend waiting between attempts of one request (defaults to 120)
+      default: 120
     # The permission-* properties below mirror the inputs of
     # actions/create-github-app-token, which generates them from GitHub's OpenAPI
     # description of the installation access token endpoint. Each one maps to the

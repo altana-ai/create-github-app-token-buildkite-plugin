@@ -30,7 +30,7 @@ skip_token_revoke=$(plugin_read_config "SKIP_TOKEN_REVOKE" "false")
 github_api_url=$(plugin_read_config "GITHUB_API_URL" "https://api.github.com")
 output_variable=$(plugin_read_config "OUTPUT_VARIABLE" "GITHUB_TOKEN")
 max_attempts=$(plugin_read_config "MAX_ATTEMPTS" "5")
-max_retry_wait=$(plugin_read_config "MAX_RETRY_WAIT" "60")
+max_retry_wait=$(plugin_read_config "MAX_RETRY_WAIT" "120")
 
 # Per-request curl timeouts, in seconds
 CONNECT_TIMEOUT=10
@@ -188,11 +188,22 @@ header_value() {
   awk -v name="$2" 'tolower($1) == name ":" { value = $2 } END { print value }' "$1" | tr -d '\r'
 }
 
+# Function to show a failed response's body in the log, with anything token-shaped masked
+loggable_body() {
+  if [[ -z "$1" ]]; then
+    echo "<empty>"
+    return
+  fi
+  sed -E 's/"token"[[:space:]]*:[[:space:]]*"[^"]*"/"token":"[REDACTED]"/g; s/gh[opsu]_[A-Za-z0-9_]+/[REDACTED]/g' <<< "$1"
+}
+
 # Function to sign a JWT unless the current one outlives a whole request with retries
 ensure_jwt() {
   local now
   now=$(date +%s)
-  [[ -n "${jwt_token:-}" && "$now" -lt "${jwt_refresh_at:-0}" ]] && return 0
+  if [[ -n "${jwt_token:-}" && "$now" -lt "${jwt_refresh_at:-0}" ]]; then
+    return 0
+  fi
 
   jwt_token=$(generate_jwt "$app_id" "$private_key") || exit 1
   # generate_jwt sets a 600s expiry; renewing 120s early keeps every attempt inside it
@@ -225,35 +236,33 @@ is_transient() {
 # Function to pick the wait before the next attempt: the server's hint, else backoff with jitter
 retry_delay() {
   local attempt="$1" retry_after="$2" remaining="$3" reset="$4" rate_limit="$5"
+  local delay
 
   if [[ "$retry_after" =~ ^[0-9]+$ ]]; then
-    echo "$retry_after"
+    delay="$retry_after"
+  elif [[ "$remaining" == 0 && "$reset" =~ ^[0-9]+$ ]]; then
+    delay=$(( reset - $(date +%s) ))
+    (( delay > 0 )) || delay=1
+  elif [[ -n "$rate_limit" ]]; then
+    # GitHub asks for at least a minute when a rate limit gives no hint
+    delay=60
+  else
+    # 2-3s, 4-7s, 8-15s, then 16-30s for every later attempt
+    local backoff=$(( 2 ** (attempt < 4 ? attempt : 4) ))
+    delay=$(( backoff + RANDOM % backoff ))
+    echo $(( delay < 30 ? delay : 30 ))
     return
   fi
 
-  if [[ "$remaining" == 0 && "$reset" =~ ^[0-9]+$ ]]; then
-    local now
-    now=$(date +%s)
-    echo $(( reset > now ? reset - now : 1 ))
-    return
-  fi
-
-  # GitHub asks for at least a minute when a rate limit gives no hint
-  if [[ -n "$rate_limit" ]]; then
-    echo 60
-    return
-  fi
-
-  # 2-3s, 4-7s, 8-15s, then 16-30s for every later attempt
-  local backoff=$(( 2 ** (attempt < 4 ? attempt : 4) ))
-  local delay=$(( backoff + RANDOM % backoff ))
-  echo $(( delay < 30 ? delay : 30 ))
+  # Up to 25% more, so parallel jobs told the same wait do not retry in lockstep
+  echo $(( delay + RANDOM % (delay / 4 + 1) ))
 }
 
 # Function to call the GitHub API, retrying transient failures
 #
 # Sets api_status to the three-digit HTTP status (000 when no complete response
-# arrived) and api_body to the response body.
+# arrived), api_body to the response body (empty after a transport error), and
+# api_failure to what went wrong on the last attempt.
 github_api_request() {
   local method="$1" url="$2" body="${3:-}"
   local -a body_args=()
@@ -261,48 +270,53 @@ github_api_request() {
     body_args=(-H "Content-Type: application/json" -d "$body")
   fi
 
-  local tmp_dir body_file header_file
-  tmp_dir=$(mktemp -d)
-  body_file="${tmp_dir}/body"
-  header_file="${tmp_dir}/headers"
-
-  local attempt=1 waited=0 curl_exit failure delay rate_limit
+  local attempt=1 waited=0 header_file output curl_exit delay rate_limit shown_body
   local retry_after remaining reset
   while true; do
     ensure_jwt
-    : > "$body_file"
-    : > "$header_file"
 
+    # Only the headers touch the disk; the body, which may hold the token, stays in memory
+    header_file=$(mktemp)
     curl_exit=0
-    api_status=$(curl -s -X "$method" -o "$body_file" -D "$header_file" -w "%{http_code}" \
+    output=$(curl -sS -X "$method" -D "$header_file" -w "%{http_code}" \
       --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
       -H "Authorization: Bearer $jwt_token" \
       -H "Accept: application/vnd.github.v3+json" \
       ${body_args[@]+"${body_args[@]}"} \
       "$url") || curl_exit=$?
-    api_body=$(cat "$body_file")
-
-    if [[ "$curl_exit" -eq 0 && "$api_status" == 2?? ]]; then
-      break
-    fi
-
+    api_status="${output: -3}"
+    api_body="${output%???}"
     retry_after=$(header_value "$header_file" "retry-after")
     remaining=$(header_value "$header_file" "x-ratelimit-remaining")
     reset=$(header_value "$header_file" "x-ratelimit-reset")
-    rate_limit=""
+    rm -f "$header_file"
 
+    if [[ ! "$api_status" =~ ^[0-9]{3}$ ]]; then
+      api_status="000"
+    fi
+
+    if [[ "$curl_exit" -eq 0 && "$api_status" == 2?? ]]; then
+      api_failure=""
+      break
+    fi
+
+    rate_limit=""
     if [[ "$curl_exit" -ne 0 ]]; then
-      failure="curl exit $curl_exit"
-      [[ "$api_status" == 2?? ]] && failure+=" after HTTP $api_status"
-      # A body cut off mid-transfer may hold a minted token, so it is never logged
+      api_failure="curl exit $curl_exit"
+      if [[ "$api_status" != 000 ]]; then
+        api_failure+=" after HTTP $api_status"
+      fi
+      # A body cut off mid-transfer may hold a minted token, so it is dropped unread
       api_status="000"
       api_body=""
-      echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($failure). Response: not logged after a transport error" >&2
+      shown_body="not logged after a transport error"
     else
-      failure="HTTP $api_status"
+      api_failure="HTTP $api_status"
       rate_limit=$(rate_limit_kind "$api_status" "$retry_after" "$remaining" "$api_body")
-      [[ -n "$rate_limit" ]] && failure+=", $rate_limit"
-      echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($failure). Response: ${api_body:-<empty>}" >&2
+      if [[ -n "$rate_limit" ]]; then
+        api_failure+=", $rate_limit"
+      fi
+      shown_body=$(loggable_body "$api_body")
     fi
 
     if ! is_transient "$curl_exit" "$api_status" "$rate_limit"; then
@@ -310,36 +324,43 @@ github_api_request() {
     fi
 
     if [[ "$attempt" -ge "$max_attempts" ]]; then
-      echo "❌ Error: $method $url still failing after $attempt attempts ($failure)" >&2
+      echo "❌ Error: $method $url still failing after $attempt attempts ($api_failure)" >&2
       break
     fi
 
     delay=$(retry_delay "$attempt" "$retry_after" "$remaining" "$reset" "$rate_limit")
     if (( waited + delay > max_retry_wait )); then
-      echo "❌ Error: $method $url still failing ($failure); waiting ${delay}s more would exceed max-retry-wait (${max_retry_wait}s)" >&2
+      echo "❌ Error: $method $url still failing ($api_failure); waiting ${delay}s more would exceed max-retry-wait (${max_retry_wait}s)" >&2
       break
     fi
 
+    echo "⚠️ Attempt $attempt/$max_attempts: $method $url failed ($api_failure). Response: $shown_body" >&2
     echo "⏳ Retrying in ${delay}s..." >&2
     sleep "$delay"
     waited=$(( waited + delay ))
     attempt=$(( attempt + 1 ))
   done
-
-  rm -rf "$tmp_dir"
 }
 
-# Function to get installation ID
+# Function to fail the step on an API call that did not succeed, logging its body once
+fail_api_call() {
+  echo "❌ Error: $1 ($api_failure)" >&2
+  if [[ "$api_status" != 000 ]]; then
+    echo "Response: $(loggable_body "$api_body")" >&2
+  fi
+  exit 1
+}
+
+# Function to look up the installation ID, into installation_id
 get_installation_id() {
   local repo_owner="$1"
   local repo_name="$2"
 
   # Get installation ID for the repository
   github_api_request GET "${github_api_url}/repos/${repo_owner}/${repo_name}/installation"
-  local response="$api_body" http_code="$api_status"
 
   # Check for 404 - App not installed
-  if [[ "$http_code" == "404" ]]; then
+  if [[ "$api_status" == "404" ]]; then
     echo "❌ Error: GitHub App is not installed on ${repo_owner}/${repo_name}" >&2
     echo "Please install the GitHub App on this repository or organization:" >&2
     echo "1. Go to your GitHub App settings" >&2
@@ -350,23 +371,18 @@ get_installation_id() {
   fi
 
   # Check for other HTTP errors
-  if [[ "$http_code" != "200" ]]; then
-    echo "❌ Error: Failed to get installation information (HTTP $http_code)" >&2
-    echo "Response: $response" >&2
-    exit 1
+  if [[ "$api_status" != 2?? ]]; then
+    fail_api_call "Failed to get installation information"
   fi
 
-  # Extract installation ID from response using jq
-  local installation_id
-  installation_id=$(echo "$response" | jq -r '.id')
+  # Extract installation ID from response using jq; a body that is not JSON has none
+  installation_id=$(jq -r '.id // empty' <<< "$api_body" 2>/dev/null) || installation_id=""
 
-  if [[ -z "$installation_id" || "$installation_id" == "null" ]]; then
+  if [[ -z "$installation_id" ]]; then
     echo "❌ Error: Failed to extract installation ID from response" >&2
-    echo "Response: $response" >&2
+    echo "Response: $(loggable_body "$api_body")" >&2
     exit 1
   fi
-
-  echo "$installation_id"
 }
 
 # Function to build permissions JSON
@@ -445,7 +461,7 @@ build_repositories_json() {
   jq -nc '$ARGS.positional' --args "${repos[@]}"
 }
 
-# Function to generate installation access token
+# Function to generate installation access token, into access_token
 generate_installation_token() {
   local installation_id="$1"
 
@@ -480,23 +496,22 @@ generate_installation_token() {
 
   # Generate installation access token
   github_api_request POST "${github_api_url}/app/installations/${installation_id}/access_tokens" "$request_body"
-  local response="$api_body" http_code="$api_status"
 
-  if [[ "$http_code" != "201" ]]; then
-    echo "❌ Error: Failed to generate installation token (HTTP $http_code). Response: $response" >&2
-    exit 1
+  if [[ "$api_status" != 2?? ]]; then
+    fail_api_call "Failed to generate installation token"
   fi
 
-  # Extract token from response using jq
-  local token
-  token=$(echo "$response" | jq -r '.token')
+  # Extract token from response using jq; a body that is not JSON has none
+  access_token=$(jq -r '.token // empty' <<< "$api_body" 2>/dev/null) || access_token=""
 
-  if [[ -z "$token" || "$token" == "null" ]]; then
-    echo "❌ Error: Failed to generate installation token. Response: $response" >&2
-    exit 1
+  if [[ -z "$access_token" ]]; then
+    api_failure="HTTP $api_status without a token"
+    fail_api_call "Failed to generate installation token"
   fi
 
-  echo "$token"
+  # Register the token with the redactor before anything else can log it
+  echo "$access_token" | buildkite-agent redactor add
+  unset api_body
 }
 
 # Main execution
@@ -510,17 +525,14 @@ read -r repo_owner repo_name <<< "$repo_info"
 echo "Repository: $repo_owner/$repo_name"
 
 echo "🔍 Getting installation ID..."
-installation_id=$(get_installation_id "$repo_owner" "$repo_name")
+get_installation_id "$repo_owner" "$repo_name"
 
 # Export installation ID as environment variable
 export GITHUB_APP_INSTALLATION_ID="$installation_id"
 echo "✅ GitHub App installation ID exported as GITHUB_APP_INSTALLATION_ID: $installation_id"
 
 echo "🎫 Generating installation access token..."
-access_token=$(generate_installation_token "$installation_id")
-
-# Add token to CLI redactor to prevent logging
-echo "$access_token" | buildkite-agent redactor add
+generate_installation_token "$installation_id"
 
 # Export token as environment variable
 export "$output_variable"="$access_token"

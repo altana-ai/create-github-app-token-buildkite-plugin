@@ -31,12 +31,14 @@ setup_test_env() {
   CURL_LOG="${TEST_TMPDIR}/curl.log"
   REDACTOR_LOG="${TEST_TMPDIR}/redactor.log"
   SLEEP_LOG="${TEST_TMPDIR}/sleep.log"
+  CLOCK_LOG="${TEST_TMPDIR}/clock.log"
   : > "$CURL_LOG"
   : > "$REDACTOR_LOG"
   : > "$SLEEP_LOG"
+  : > "$CLOCK_LOG"
 
   PATH="${BATS_TEST_DIRNAME}/stubs:${PATH}"
-  export PATH CURL_LOG REDACTOR_LOG SLEEP_LOG
+  export PATH CURL_LOG REDACTOR_LOG SLEEP_LOG CLOCK_LOG
 
   export STUB_ACCESS_TOKEN="ghs_stubaccesstoken"
   export STUB_INSTALLATION_ID="87654321"
@@ -76,6 +78,22 @@ curl_calls() {
 # How many requests went to URLs ending in the given path.
 calls_to() {
   grep -c -- "${1}\$" "$CURL_LOG"
+}
+
+# Output assertions that fail the test on every bash: before 4.1, a failing
+# `[[ ]]` that is not a test's last command is ignored.
+# shellcheck disable=SC2154 # bats `run` sets output
+assert_output_contains() {
+  [[ "$output" == *"$1"* ]] || { echo "expected output to contain: $1"; return 1; }
+}
+
+refute_output_contains() {
+  [[ "$output" != *"$1"* ]] || { echo "expected output not to contain: $1"; return 1; }
+}
+
+# How many times the output contains a string.
+output_count() {
+  grep -oF -- "$1" <<< "$output" | wc -l | tr -d ' '
 }
 
 # The distinct JWTs the hook sent, one per line.

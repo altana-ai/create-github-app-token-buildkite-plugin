@@ -85,7 +85,7 @@ case "$url" in
   */access_tokens)
     # POST — mint an installation access token.
     http_code=$(pick_code "${STUB_ACCESS_TOKEN_HTTP_CODE:-201}")
-    if [[ "${http_code#exit:*:}" != "201" || "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
+    if [[ "${http_code#exit:*:}" != 2?? || "${STUB_ACCESS_TOKEN:-}" == "" ]]; then
       respond "$http_code" "$error_body"
     else
       respond "$http_code" "{\"token\":\"${STUB_ACCESS_TOKEN}\",\"expires_at\":\"2099-01-01T00:00:00Z\"}"
