@@ -84,6 +84,21 @@ Default: `GITHUB_TOKEN`
 
 Example: `"CUSTOM_TOKEN_VAR"`
 
+#### `max-attempts` (integer)
+
+How many times each GitHub API request is attempted before the step fails. Only
+transient failures are retried; see [Retries](#retries).
+
+Default: `5`
+
+#### `max-retry-wait` (integer)
+
+The most seconds one request may spend waiting between attempts. A retry that
+would take the total past this limit, such as a long `Retry-After`, fails the
+step instead.
+
+Default: `120`
+
 ### Permission parameters
 
 Each `permission-*` option sets one permission on the minted token, to `read` or
@@ -359,6 +374,75 @@ it rewrites the pipeline.
 5. **Security Setup**: Adds the token to Buildkite's redactor and exports it as an environment variable
 6. **Cleanup**: Removes the token from the environment after command execution
 
+### Retries
+
+The installation lookup and the token request each retry transient failures:
+
+- curl transport errors: exits 5, 6, 7, 16, 18, 28, 35, 52, 55, 56 and 92, which
+  cover DNS, connection, HTTP/2, partial transfers, timeouts, the TLS handshake
+  and dropped connections. Some of these, such as an unresolvable host (6), a
+  refused connection (7) or a failed TLS handshake (35), can also mean a
+  misconfigured `github-api-url` or proxy, which no retry fixes. They are retried
+  anyway, because DNS failures and refused connections are common during GitHub
+  incidents. Other exits, such as a malformed URL (3) or a certificate that fails
+  verification (60), are configuration errors and fail at once.
+- HTTP 429 and 5xx
+- HTTP 403 when it is a rate limit: a `Retry-After` header,
+  `x-ratelimit-remaining: 0`, or a body that names a secondary rate limit
+  (or, in older GitHub and GHES wording, an abuse detection mechanism)
+
+When a status arrives before the connection fails, the status decides: a 404
+followed by a timeout is treated as a 404 and fails at once.
+
+The wait before the next attempt is chosen in this order:
+
+1. the server's `Retry-After`
+2. the time until `x-ratelimit-reset`, when a rate-limit response says the
+   limit is exhausted (a 5xx carrying these headers gets ordinary backoff)
+3. 60s, for a rate limit that gives neither, as
+   [GitHub asks](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#handle-rate-limit-errors-appropriately),
+   doubled for each consecutive rate limit (60s, 120s, ...)
+4. exponential backoff with jitter: 2-3s, 4-7s, 8-15s, then 16-30s for every
+   later attempt
+
+A wait is never shorter than that attempt's backoff step (2s, 4s, 8s, then 16s),
+so a `Retry-After: 0` or a reset already in the past still backs off. The first
+three get up to 25% extra jitter, and at least 1s, so parallel jobs told to wait
+the same time do not all retry at once. The budget below is checked against the
+wait before jitter, and jitter never takes the total past it, so a hint that
+fits the budget is always honoured.
+
+`max-retry-wait` caps the total wait for one request. The default of 120s fits
+the whole backoff (at most 55s over five attempts), and also fits one
+secondary-rate-limit wait (at most 75s) after the backoff that comes before it,
+so with the defaults a request waits at most two minutes. A second consecutive
+secondary rate limit (120-150s) does not fit and fails the step. Each attempt
+beyond five can add up to 30s, so raise `max-retry-wait` along with
+`max-attempts`.
+
+Every request, including the revocation in `post-command`, has a 10s connect
+timeout and a 30s overall timeout. The JWT is signed once and signed again only
+when less than 2 minutes of its 10-minute lifetime remain, so no attempt sends
+an expired one.
+
+Anything else, such as 401, 404 or 422, fails at once. Each retried attempt
+logs its attempt number, the HTTP status or curl exit code (with any status
+received before the connection failed), and the response body. The final
+failure is logged once, with its body. Anything token-shaped in a logged body
+(`"token": "..."`, `gho_`, `ghp_`, `ghr_`, `ghs_`, `ghu_` and `github_pat_`
+values) is masked, and the JWT and the minted token are never logged. After a
+transport error the body is not logged at all, because a token response cut off
+mid-transfer may still hold the token. A token from any 2xx response is
+accepted and added to the redactor before anything else is logged.
+
+> [!NOTE]
+> Creating a token is not idempotent. When the token request fails after GitHub
+> has minted a token, either with a 5xx or with a connection dropped mid-response
+> (logged as, for example, `curl exit 56 after HTTP 201`), the retry mints a
+> second one. The first token is never used or revoked, even when part of it
+> arrived in the cut-off response. It keeps the scope the step requested and
+> expires within an hour.
+
 ### Environment Variable Expansion
 
 The plugin supports referencing environment variables using the `$VARIABLE_NAME` syntax for the `app-id` and `private-key` parameters. This allows you to keep sensitive values out of your pipeline configuration:
@@ -401,7 +485,11 @@ This error replaces the generic "Failed to get installation ID" message and prov
 
 ### Error: Failed to generate installation token
 
-This typically indicates:
+The message names the HTTP status, or the curl exit code when the connection
+failed, with any status received before it (for example `curl exit 18 after
+HTTP 503`); the attempt log above it shows each retried failure. A transient failure that outlasted the
+retries reads `still failing after N attempts`. Otherwise this typically
+indicates:
 
 1. Invalid private key format
 2. Clock skew (JWT timestamps are invalid)

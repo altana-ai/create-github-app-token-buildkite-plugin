@@ -32,6 +32,14 @@ configuration:
       type: string
       description: Environment variable name to store the token (Buildkite-specific)
       default: GITHUB_TOKEN
+    max-attempts:
+      type: integer
+      description: Attempts per GitHub API request before giving up on transient failures (defaults to 5)
+      default: 5
+    max-retry-wait:
+      type: integer
+      description: Most seconds to spend waiting between attempts of one request (defaults to 120)
+      default: 120
     # The permission-* properties below mirror the inputs of
     # actions/create-github-app-token, which generates them from GitHub's OpenAPI
     # description of the installation access token endpoint. Each one maps to the
