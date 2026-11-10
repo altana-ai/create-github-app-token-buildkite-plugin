@@ -106,11 +106,14 @@ generate_jwt() {
   # Generate JWT payload
   local +x now
   now=$(date +%s)
-  local +x exp=$((now + 600))  # 10 minutes expiration
+  # Margins on both claims per GitHub's clock-drift guidance:
+  # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+  local +x iat=$((now - 60))
+  local +x exp=$((now + 540))
 
   # Create header and payload
   local +x header='{"alg":"RS256","typ":"JWT"}'
-  local +x payload="{\"iat\":$now,\"exp\":$exp,\"iss\":\"$app_id\"}"
+  local +x payload="{\"iat\":$iat,\"exp\":$exp,\"iss\":\"$app_id\"}"
 
   # Base64 encode header and payload
   local +x encoded_header
@@ -212,8 +215,8 @@ ensure_jwt() {
   fi
 
   _cgat_jwt=$(generate_jwt "$app_id" "$private_key") || exit 1
-  # generate_jwt sets a 600s expiry; renewing 120s early keeps every attempt inside it
-  _cgat_jwt_refresh_at=$(( now + 480 ))
+  # generate_jwt sets a 540s expiry; renewing 120s early keeps every attempt inside it
+  _cgat_jwt_refresh_at=$(( now + 420 ))
 }
 
 # Function to name the rate limit a failed response hit, or print nothing

@@ -431,6 +431,19 @@ teardown() {
   [ "$(sent_jwts | wc -l)" -eq 2 ]
 }
 
+@test "signs the JWT with iat 60s in the past and exp 540s ahead" {
+  export STUB_NOW="1700000000"
+
+  run bash "$PRE_COMMAND"
+
+  [ "$status" -eq 0 ]
+  local payload
+  payload=$(sent_jwts | head -n1 | cut -d. -f2 | tr '_-' '/+')
+  payload=$(printf '%s%s' "$payload" "$(printf '=%.0s' $(seq 1 $(( (4 - ${#payload} % 4) % 4 ))))" | base64 -d)
+  [ "$(jq -r .iat <<< "$payload")" -eq 1699999940 ]
+  [ "$(jq -r .exp <<< "$payload")" -eq 1700000540 ]
+}
+
 @test "never logs the JWT or the minted token" {
   export STUB_INSTALLATION_HTTP_CODE="502 200"
   export STUB_ACCESS_TOKEN_HTTP_CODE="500 201"
